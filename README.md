@@ -77,14 +77,15 @@ The workers can change. The rules can change. The enforcement persists.
 
 ## What runs today
 
-The first executable slice: **Intent → Contract → Evidence → Decision**. Give Lawman an intent, a contract, and evidence, and it decides whether the transition is allowed and explains why.
+**Intent → Contract Selection → Contract → Evidence → Decision**. Give Lawman an intent and evidence. It selects the contract that governs that intent from the repository's own `.lawman/`, decides whether the transition is allowed, and explains why.
 
 ```bash
 python -m lawman \
   --intent examples/deploy-to-production/intent.json \
-  --contract examples/deploy-to-production/contract.json \
   --evidence examples/deploy-to-production/evidence.json
 ```
+
+The requester chooses what it wants to do. It does not choose the rules it will be judged by — there is no `--contract`.
 
 Work and Transition are not built yet.
 
