@@ -1,0 +1,6 @@
+{
+  "requires": [
+    "tests_passed",
+    "human_approved"
+  ]
+}
