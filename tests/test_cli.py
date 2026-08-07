@@ -128,16 +128,16 @@ class FailsClosedWhenItCannotFindTheRules(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("not valid JSON", result.stderr)
 
-    def test_a_registry_key_that_is_not_action_and_target_exits_2(self):
+    def test_a_registry_that_is_not_nested_by_action_and_target_exits_2(self):
         with tempfile.TemporaryDirectory() as directory:
             result = run(cwd=governed_repository(directory, {"deploy": "contracts/deploy-production.json"}))
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("must be 'action:target'", result.stderr)
+        self.assertIn("contract registry action 'deploy' must be an object", result.stderr)
 
     def test_a_configured_contract_that_is_missing_exits_2(self):
         with tempfile.TemporaryDirectory() as directory:
-            repository = governed_repository(directory, {"deploy:production": "contracts/deploy-production.json"})
+            repository = governed_repository(directory, {"deploy": {"production": "contracts/deploy-production.json"}})
             result = run(cwd=repository)
 
         self.assertEqual(result.returncode, 2)
@@ -146,7 +146,7 @@ class FailsClosedWhenItCannotFindTheRules(unittest.TestCase):
     def test_a_contract_outside_the_policy_directory_exits_2(self):
         with tempfile.TemporaryDirectory() as directory:
             write(Path(directory) / "weak.json", {"requires": ["tests_passed"]})
-            repository = governed_repository(directory, {"deploy:production": "../weak.json"})
+            repository = governed_repository(directory, {"deploy": {"production": "../weak.json"}})
             result = run(cwd=repository)
 
         self.assertEqual(result.returncode, 2)

@@ -5,10 +5,11 @@ rules it will be judged by. Nothing the requester supplies at runtime names the
 contract (ADR 6).
 
 Selection reads a registry checked into the repository being governed:
-`.lawman/contracts.json`, mapping `action:target` to a contract file. Contract
-paths are relative to the policy directory that holds the registry, and one
-that resolves outside it is refused — the repository can only offer contracts
-it owns.
+`.lawman/contracts.json`, nested the way an intent is shaped — action, then
+target — so it says which contract governs `deploy -> production` without
+giving that pair a name of its own. Contract paths are relative to the policy
+directory that holds the registry, and one that resolves outside it is refused
+— the repository can only offer contracts it owns.
 
 Selection fails closed, and never as a denial. An unknown intent, an
 unreadable registry, or an unreadable contract means Lawman could not find the
@@ -38,25 +39,33 @@ REGISTRY_FILE = "contracts.json"
 class ContractRegistry:
     """A governed repository's map from intent to authoritative contract.
 
-    Keys are `action:target`. Values are contract paths relative to the policy
-    directory. The map is copied and made read-only on construction, for the
-    same reason evidence is: rules that could change after they were read would
-    make decisions unrepeatable.
+    Nested by action, then target, mirroring the intent it selects on. Values
+    are contract paths relative to the policy directory:
+
+        {"deploy": {"production": "contracts/deploy-production.json"}}
+
+    Both levels are copied and made read-only on construction, for the same
+    reason evidence is: rules that could change after they were read would make
+    decisions unrepeatable.
     """
 
-    contracts: Mapping[str, str]
+    contracts: Mapping[str, Mapping[str, str]]
 
     def __post_init__(self) -> None:
-        contracts = _object(self.contracts, "contract registry")
-        if not contracts:
+        actions = _object(self.contracts, "contract registry")
+        if not actions:
             raise LawmanError("contract registry names no contracts")
-        for key, path in contracts.items():
-            _require_name(key, "contract registry key")
-            parts = key.split(":")
-            if len(parts) != 2 or not all(part.strip() for part in parts):
-                raise LawmanError(f"contract registry key {key!r} must be 'action:target'")
-            _require_name(path, f"contract registry entry {key!r}")
-        object.__setattr__(self, "contracts", MappingProxyType(dict(contracts)))
+        by_action: dict[str, Mapping[str, str]] = {}
+        for action, targets in actions.items():
+            _require_name(action, "contract registry action")
+            targets = _object(targets, f"contract registry action {action!r}")
+            if not targets:
+                raise LawmanError(f"contract registry action {action!r} names no targets")
+            for target, path in targets.items():
+                _require_name(target, f"contract registry target under {action!r}")
+                _require_name(path, f"contract registry entry {action!r} -> {target!r}")
+            by_action[action] = MappingProxyType(dict(targets))
+        object.__setattr__(self, "contracts", MappingProxyType(by_action))
 
     @classmethod
     def from_dict(cls, data: Any) -> ContractRegistry:
@@ -64,10 +73,10 @@ class ContractRegistry:
         return cls(contracts=data)
 
     def path_for(self, intent: Intent) -> str:
-        key = f"{intent.action}:{intent.target}"
-        if key not in self.contracts:
+        targets = self.contracts.get(intent.action, {})
+        if intent.target not in targets:
             raise LawmanError(f"no contract is configured for {intent}")
-        return self.contracts[key]
+        return targets[intent.target]
 
 
 def select_contract(intent: Intent, policy: Path | str = POLICY_DIRECTORY) -> Contract:

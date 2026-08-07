@@ -51,11 +51,13 @@ Not from the caller. The requester passes an intent and evidence; Lawman resolve
 
 ```json
 {
-  "deploy:production": "contracts/deploy-production.json"
+  "deploy": {
+    "production": "contracts/deploy-production.json"
+  }
 }
 ```
 
-* The key is the intent's `action:target`.
+* The registry is nested the way an intent is shaped: action, then target. `deploy -> production` is looked up, not named — the pair has no identity of its own.
 * The value is a path relative to `.lawman/`, and it must stay inside `.lawman/` — an absolute path, a `..` climb, or a symlink out is refused.
 * `.lawman/` itself is relative to the current working directory, so **run Lawman from the root of the repository it is governing.**
 
@@ -113,8 +115,8 @@ Selecting — `tests/test_selection.py`:
 | `deploy -> production` resolves to the checked-in contract | `SelectsTheContractTheRepositoryConfigured.test_deploy_to_production_resolves_to_the_checked_in_contract` |
 | a contract beside the intent does not govern | `SelectsTheContractTheRepositoryConfigured.test_a_contract_is_read_from_the_policy_directory_not_from_beside_the_intent` |
 | identical inputs → identical contract | `SelectsTheContractTheRepositoryConfigured.test_the_same_intent_always_selects_the_same_contract` |
-| unknown intent → refuse | `FailsClosedWhenItCannotFindTheRules.test_an_intent_with_no_configured_contract_is_refused` |
-| missing or malformed registry → refuse | `FailsClosedWhenItCannotFindTheRules.test_a_missing_registry_is_refused`, `.test_a_registry_that_is_not_a_map_of_names_is_refused` |
+| unknown target, unknown action → refuse | `FailsClosedWhenItCannotFindTheRules.test_an_intent_with_no_configured_contract_is_refused`, `.test_an_unconfigured_action_is_refused` |
+| missing or malformed registry → refuse | `FailsClosedWhenItCannotFindTheRules.test_a_missing_registry_is_refused`, `.test_a_registry_that_is_not_nested_names_is_refused` |
 | missing or invalid contract file → refuse | `FailsClosedWhenItCannotFindTheRules.test_a_configured_contract_that_cannot_be_read_is_refused`, `.test_a_configured_contract_that_requires_nothing_is_refused` |
 | contract outside `.lawman/` → refuse | `RefusesContractsTheRepositoryDoesNotOwn` (climb, absolute path, symlink) |
 
