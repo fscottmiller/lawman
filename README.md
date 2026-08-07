@@ -77,7 +77,9 @@ The workers can change. The rules can change. The enforcement persists.
 
 ## What runs today
 
-**Intent → Contract Selection → Contract → Evidence → Decision**. Give Lawman an intent and evidence. It selects the contract that governs that intent from the repository's own `.lawman/`, decides whether the transition is allowed, and explains why.
+Lawman makes two separate calls.
+
+**Intent → Contract Selection → Contract → Evidence → Decision**. It decides whether policy allows a transition:
 
 ```bash
 python -m lawman \
@@ -87,7 +89,15 @@ python -m lawman \
 
 The requester chooses what it wants to do. It does not choose the rules it will be judged by — there is no `--contract`.
 
-Work and Transition are not built yet.
+**Work Contract → Evidence → Work Contract Result**. It decides whether one piece of work satisfied every acceptance criterion:
+
+```bash
+python -m lawman work \
+  --contract examples/work-contract/contract.json \
+  --evidence examples/work-contract/evidence.json
+```
+
+Satisfying a work contract proves the work is done. It does not authorize a transition. Transition execution is not built yet.
 
 [How to run it](docs/running-lawman.md) · [Why it looks like this](docs/decisions/)
 
@@ -96,3 +106,4 @@ Work and Transition are not built yet.
 Lawman is licensed under the [Apache License 2.0](LICENSE).
 
 Copyright 2026 Scott Miller.
+

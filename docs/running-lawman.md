@@ -1,10 +1,56 @@
 # Running Lawman
 
-**Intent → Contract Selection → Contract → Evidence → Decision**. Give Lawman an intent and evidence. It selects the contract that governs that intent, decides whether the transition is allowed, and explains why. Work and Transition are not built yet.
+Lawman makes two separate calls:
+
+* **Work Contract → Evidence → Work Contract Result** asks whether one piece of work met its acceptance criteria.
+* **Intent → Contract Selection → Contract → Evidence → Decision** asks whether policy allows a transition.
+
+A satisfied work contract does not authorize a transition. Policy still decides what is allowed. Transition execution is not built yet.
 
 Python 3.11+. No dependencies, no install step.
 
-## The canonical example
+## Work contract satisfaction
+
+A work contract names explicit acceptance criteria. Evidence names exactly one criterion, one traceable source, and whether that source passed:
+
+```json
+{
+  "criteria": [
+    { "id": "AC1", "description": "Invalid tokens return 401" },
+    { "id": "AC2", "description": "Valid tokens return 200" }
+  ]
+}
+```
+
+```json
+{
+  "evidence": [
+    { "criterion_id": "AC1", "source": "test_invalid_token", "passed": true }
+  ]
+}
+```
+
+Evidence is a list so duplicate entries can be refused instead of silently overwritten.
+
+Run the complete example:
+
+```bash
+python -m lawman work \
+  --contract examples/work-contract/contract.json \
+  --evidence examples/work-contract/evidence.json
+```
+
+Each criterion becomes exactly one of:
+
+* `proven` — explicit evidence exists and passed
+* `failed` — explicit evidence exists and failed
+* `unproven` — no evidence exists
+
+The result is satisfied only when every criterion is proven. Missing evidence fails closed as `unproven`. Unknown criteria, duplicate entries, and malformed input are refused with exit `2`; a valid but unsatisfied result exits `1`; a satisfied result exits `0`.
+
+Results follow contract order and include the criterion ID, description, status, evidence source, and explanation. Use `evidence-missing-audit.json` to see an explained `unproven` result.
+
+## Transition policy
 
 Deployment to production is allowed only when tests have passed and a human has approved.
 
@@ -111,6 +157,20 @@ CI runs both, in separate jobs. Why they are configured rather than left on defa
 
 Every acceptance criterion has a named test.
 
+Working — `tests/test_work.py`:
+
+| Behavior | Test |
+| --- | --- |
+| all criteria proven → satisfied | `AccountsForEveryCriterion.test_all_criteria_proven_satisfies_the_contract` |
+| one failed → unsatisfied | `AccountsForEveryCriterion.test_one_failed_criterion_does_not_satisfy_the_contract` |
+| missing or no evidence → unproven | `AccountsForEveryCriterion.test_one_missing_criterion_is_unproven_and_does_not_satisfy`, `.test_no_evidence_leaves_every_criterion_unproven` |
+| contract order and determinism | `AccountsForEveryCriterion.test_result_order_follows_the_contract_not_the_evidence`, `.test_identical_inputs_produce_identical_results` |
+| malformed, duplicate, or unknown input → refuse | `RefusesMalformedOrAmbiguousInput` |
+| direct construction preserves invariants | `HoldsItsInvariantsWhenConstructedDirectly.test_direct_construction_cannot_bypass_domain_invariants` |
+| results are immutable | `HoldsItsInvariantsWhenConstructedDirectly.test_results_are_immutable_after_construction` |
+
+`tests/test_work_cli.py` covers the same capability through `python -m lawman work`, including exit codes and byte-identical output.
+
 Deciding — `tests/test_decision.py`:
 
 | Behavior | Test |
@@ -140,3 +200,4 @@ Selecting — `tests/test_selection.py`:
 ## Why it looks like this
 
 The decisions behind this slice, and the arguments against the alternatives, are in [`decisions/`](decisions/).
+
