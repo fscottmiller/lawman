@@ -144,6 +144,10 @@ Python 3.11+. No dependencies. Every acceptance criterion has a named test in `t
 
 `tests/test_cli.py` covers the same ground through the command line, including exit codes, unreadable and malformed input, and byte-identical output across runs.
 
+### Why it looks like this
+
+The decisions behind this slice, and the arguments against the alternatives, are in [`docs/decisions/`](docs/decisions/): Python and the standard library, a requirement is a name, silence is not proof, three JSON files and a CLI.
+
 ## License
 
 Lawman is licensed under the [Apache License 2.0](LICENSE).

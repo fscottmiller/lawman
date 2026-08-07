@@ -4,14 +4,13 @@ The first executable slice of Lawman. It decides whether an intent may
 transition, and says why. It does not do the work, and it does not perform the
 transition.
 
-Design notes worth keeping:
+Two rules shape everything below. The argument for each is in docs/decisions/.
 
-* A requirement is just a name. Evidence either proves that name true, proves it
-  false, or says nothing. Anything richer (operators, values, requirement types)
-  would be a rules engine, which Lawman is not.
-* Evidence must be explicit. Silence is never proof.
-* An empty contract is rejected rather than treated as "allow everything". A
-  contract that proves nothing is a misconfiguration, not a permit.
+* A requirement is a name. Evidence proves it true or proves it false, and
+  nothing richer is expressible (ADR 3).
+* Silence is not proof, so an absent fact denies exactly like a false one, and
+  a contract requiring nothing is a misconfiguration rather than a permit
+  (ADR 4).
 """
 
 from __future__ import annotations

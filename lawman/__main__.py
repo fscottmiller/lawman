@@ -1,6 +1,6 @@
 """Command line entry point: python -m lawman
 
-Exit codes are the useful part of the interface:
+Exit codes are the useful part of the interface (ADR 5):
     0  transition allowed
     1  transition denied
     2  input could not be understood
