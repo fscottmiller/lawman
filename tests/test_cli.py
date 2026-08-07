@@ -43,6 +43,18 @@ def governed_repository(directory, registry, contracts=()):
 
 
 class CanonicalExample(unittest.TestCase):
+    def test_top_level_help_points_to_the_work_command(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "lawman", "--help"],
+            cwd=ROOT,
+            env={**os.environ, "PYTHONPATH": str(ROOT)},
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("lawman work --help", result.stdout)
+
     def test_readme_command_allows_the_deploy(self):
         result = run()
 
