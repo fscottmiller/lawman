@@ -19,8 +19,10 @@ left to distrust. `from_dict` only unwraps JSON.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any
 
 
 class LawmanError(ValueError):
@@ -69,7 +71,11 @@ class Contract:
 
 @dataclass(frozen=True)
 class Evidence:
-    """Facts presented to Lawman. A fact is proven true or proven false."""
+    """Facts presented to Lawman. A fact is proven true or proven false.
+
+    The mapping is copied and made read-only on construction. Evidence that
+    could change after it was presented would make decisions unrepeatable.
+    """
 
     facts: Mapping[str, bool]
 
@@ -79,7 +85,7 @@ class Evidence:
             _require_name(name, "evidence key")
             if not isinstance(proof, bool):
                 raise LawmanError(f"evidence.{name} must be true or false, not {proof!r}")
-        object.__setattr__(self, "facts", dict(facts))
+        object.__setattr__(self, "facts", MappingProxyType(dict(facts)))
 
     @classmethod
     def from_dict(cls, data: Any) -> Evidence:
@@ -148,7 +154,7 @@ def _explain(
 
 
 def _object(data: Any, label: str) -> Mapping[str, Any]:
-    if not isinstance(data, dict):
+    if not isinstance(data, Mapping):
         raise LawmanError(f"{label} must be an object")
     return data
 

@@ -184,6 +184,23 @@ class HoldsItsInvariantsWhenConstructedDirectly(unittest.TestCase):
 
         self.assertTrue(decide(DEPLOY, PRODUCTION_CONTRACT, evidence).allowed)
 
+    def test_evidence_cannot_be_rewritten_after_it_is_presented(self):
+        evidence = Evidence({"tests_passed": True, "human_approved": True})
+
+        with self.assertRaises(TypeError):
+            evidence.facts["tests_passed"] = False
+        with self.assertRaises(TypeError):
+            del evidence.facts["human_approved"]
+        with self.assertRaises(AttributeError):
+            evidence.facts = {"tests_passed": False}
+
+        self.assertTrue(decide(DEPLOY, PRODUCTION_CONTRACT, evidence).allowed)
+
+    def test_evidence_can_be_rebuilt_from_the_facts_of_another(self):
+        original = Evidence({"tests_passed": True, "human_approved": True})
+
+        self.assertEqual(Evidence(original.facts), original)
+
 
 if __name__ == "__main__":
     unittest.main()
