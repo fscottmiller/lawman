@@ -17,6 +17,8 @@ Work contracts and transition policy are separate domains.
 
 A work contract belongs to one piece of work. It names acceptance criteria, accepts evidence mapped explicitly to each criterion, and produces a work-contract result. Every criterion is proven, failed, or unproven. The aggregate is satisfied only when all are proven.
 
+Criterion IDs must be unique. Unlike repeated transition requirements, duplicate criteria are refused rather than deduplicated because the same ID can carry conflicting descriptions. Silently choosing one would lose an obligation.
+
 Transition policy decides whether an intent is allowed. It remains unchanged.
 
 For this local slice, the caller names the work-contract file. That identifies the work being checked; it does not select the policy governing a transition.
@@ -26,4 +28,3 @@ For this local slice, the caller names the work-contract file. That identifies t
 A satisfied work contract can become evidence for policy later, but it does not authorize anything by itself.
 
 Lawman owns criterion accounting. It does not gain operators, expressions, inheritance, composition, or another policy language.
-
