@@ -1,4 +1,8 @@
-"""Command line entry point: python -m lawman."""
+"""Command line entry point: python -m lawman.
+
+Both commands exit 0 for success, 1 for a valid negative result, and 2 when
+Lawman cannot reach a result because the input or governing rules are invalid.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +29,8 @@ def _transition(argv: Sequence[str]) -> int:
         description="Decide whether an intent may transition, given evidence.",
         epilog=(
             f"The contract is selected from {POLICY_DIRECTORY}/{REGISTRY_FILE} in the current "
-            "directory, not supplied by the caller."
+            "directory, not supplied by the caller. "
+            "Run 'lawman work --help' to evaluate a work contract."
         ),
     )
     parser.add_argument("--intent", required=True, metavar="PATH", help="JSON file: the requested action")
