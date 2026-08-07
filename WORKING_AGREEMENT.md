@@ -16,7 +16,13 @@ Ponytail is an engineering discipline inspired by [Dietrich Gebert's Ponytail](h
 6. Can it be one line? Make it one line.
 7. Only then, write the minimum that works.
 
-The ladder runs after we understand the problem, not instead of understanding it. Lazy means efficient, not careless: do not cut validation, error handling, security, accessibility, or anything explicitly requested. Prefer concise prose, small abstractions, and obvious next steps. Complexity must earn its place.
+The ladder runs after we understand the problem, not instead of understanding it. It applies to implementation choices within an established boundary. Choosing or replacing a boundary — such as a dependency at a seam, a provider, or an execution layer — is a tool choice governed by the next section.
+
+Lazy means efficient, not careless: do not cut validation, error handling, security, accessibility, or anything explicitly requested. Prefer small abstractions and obvious next steps. Complexity must earn its place.
+
+## Write for action
+
+Lead with the answer. Add only the detail needed to act. Put deeper explanation below the useful surface.
 
 ## Choose the best tool for the job
 
@@ -34,7 +40,7 @@ For Lawman itself, agent-authored contributions follow the same review and evide
 
 ## Evidence over assertion
 
-Every acceptance criterion maps to exactly one named automated test as its authoritative proof. A test may contain multiple cases or assertions, and related criteria may share a test when that is the clearest mapping. Every test runs in CI. Pull-request checks run the complete test suite; they do not selectively omit tests.
+Every acceptance criterion is covered by at least one named automated test, and the mapping from criterion to test is explicit. Tests may contain multiple cases or assertions, and one test may cover multiple related criteria. Every test runs in CI. Pull-request checks run the complete test suite; they do not selectively omit tests.
 
 Documentation should make claims that can be checked, and implementation decisions should leave enough evidence to explain what happened and why.
 
