@@ -147,5 +147,43 @@ class RejectsMalformedInput(unittest.TestCase):
         self.assertEqual(contract.requires, ("tests_passed", "human_approved"))
 
 
+class HoldsItsInvariantsWhenConstructedDirectly(unittest.TestCase):
+    """Parsing is one way in, not the only way. The invariants belong to the types."""
+
+    def test_a_contract_that_requires_nothing_cannot_exist(self):
+        for requires in ((), []):
+            with self.subTest(requires=requires):
+                with self.assertRaises(LawmanError):
+                    Contract(requires=requires)
+
+    def test_contract_rejects_requirements_that_are_not_names(self):
+        for requires in ("tests_passed", None, ("tests_passed", ""), ("tests_passed", 1)):
+            with self.subTest(requires=requires):
+                with self.assertRaises(LawmanError):
+                    Contract(requires=requires)
+
+    def test_contract_normalises_its_requirements(self):
+        contract = Contract(requires=["tests_passed", "human_approved", "tests_passed"])
+
+        self.assertEqual(contract.requires, ("tests_passed", "human_approved"))
+
+    def test_intent_rejects_blank_fields(self):
+        with self.assertRaises(LawmanError):
+            Intent(action="deploy", target="   ")
+
+    def test_evidence_rejects_facts_that_are_not_booleans(self):
+        for facts in ({"tests_passed": "true"}, {"tests_passed": 1}, {"": True}, None):
+            with self.subTest(facts=facts):
+                with self.assertRaises(LawmanError):
+                    Evidence(facts=facts)
+
+    def test_evidence_does_not_alias_the_caller_s_facts(self):
+        facts = {"tests_passed": True, "human_approved": True}
+        evidence = Evidence(facts)
+        facts["tests_passed"] = False
+
+        self.assertTrue(decide(DEPLOY, PRODUCTION_CONTRACT, evidence).allowed)
+
+
 if __name__ == "__main__":
     unittest.main()

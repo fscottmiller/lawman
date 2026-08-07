@@ -11,6 +11,10 @@ Two rules shape everything below. The argument for each is in docs/decisions/.
 * Silence is not proof, so an absent fact denies exactly like a false one, and
   a contract requiring nothing is a misconfiguration rather than a permit
   (ADR 4).
+
+Invariants live in `__post_init__`, not in the parsers, so an invalid Intent,
+Contract, or Evidence cannot be constructed at all and `decide()` has nothing
+left to distrust. `from_dict` only unwraps JSON.
 """
 
 from __future__ import annotations
@@ -30,13 +34,14 @@ class Intent:
     action: str
     target: str
 
+    def __post_init__(self) -> None:
+        _require_name(self.action, "intent.action")
+        _require_name(self.target, "intent.target")
+
     @classmethod
     def from_dict(cls, data: Any) -> Intent:
         fields = _object(data, "intent")
-        return cls(
-            action=_name(fields.get("action"), "intent.action"),
-            target=_name(fields.get("target"), "intent.target"),
-        )
+        return cls(action=fields.get("action"), target=fields.get("target"))
 
     def __str__(self) -> str:
         return f"{self.action} -> {self.target}"
@@ -48,14 +53,18 @@ class Contract:
 
     requires: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        if isinstance(self.requires, str) or not isinstance(self.requires, (list, tuple)):
+            raise LawmanError("contract.requires must be a list of requirement names")
+        if not self.requires:
+            raise LawmanError("contract.requires must name at least one requirement")
+        for requirement in self.requires:
+            _require_name(requirement, "contract.requires[]")
+        object.__setattr__(self, "requires", tuple(dict.fromkeys(self.requires)))
+
     @classmethod
     def from_dict(cls, data: Any) -> Contract:
-        fields = _object(data, "contract")
-        requires = fields.get("requires")
-        if not isinstance(requires, list) or not requires:
-            raise LawmanError("contract.requires must be a non-empty list of requirement names")
-        names = [_name(item, "contract.requires[]") for item in requires]
-        return cls(requires=tuple(dict.fromkeys(names)))
+        return cls(requires=_object(data, "contract").get("requires"))
 
 
 @dataclass(frozen=True)
@@ -64,13 +73,18 @@ class Evidence:
 
     facts: Mapping[str, bool]
 
-    @classmethod
-    def from_dict(cls, data: Any) -> Evidence:
-        facts = _object(data, "evidence")
+    def __post_init__(self) -> None:
+        facts = _object(self.facts, "evidence")
         for name, proof in facts.items():
+            _require_name(name, "evidence key")
             if not isinstance(proof, bool):
                 raise LawmanError(f"evidence.{name} must be true or false, not {proof!r}")
-        return cls(facts=dict(facts))
+        object.__setattr__(self, "facts", dict(facts))
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Evidence:
+        """An evidence document is the fact map itself."""
+        return cls(facts=data)
 
 
 @dataclass(frozen=True)
@@ -139,7 +153,6 @@ def _object(data: Any, label: str) -> Mapping[str, Any]:
     return data
 
 
-def _name(value: Any, label: str) -> str:
+def _require_name(value: Any, label: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise LawmanError(f"{label} must be a non-empty string")
-    return value
