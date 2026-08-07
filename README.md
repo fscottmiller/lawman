@@ -15,6 +15,8 @@ Lawman is a governance layer for autonomous software delivery.
 
 It coordinates agents, tools, and pipelines — not by trusting them, but by constraining them. Every consequential change must satisfy its contract and applicable policy, backed by evidence, before it becomes reality.
 
+Lawman is designed for autonomous, cloud-driven changes, but it is not limited to them. Work may be produced by an agent, a human engineer, a tool, or a combination. Lawman governs the change, not the identity of the author.
+
 If it can’t be proven, it doesn’t happen.
 
 ### Why does it exist?
@@ -33,6 +35,8 @@ From there, Lawman drives it through a controlled sequence:
 Intent → Contract → Work → Evidence → Decision → Transition
 
 The goal is not to maximize agent activity. The goal is to produce changes that empirically satisfy the contract.
+
+Lawman does not create a separate manual path. The actor may matter to policy — for example, a repository may require human approval or independent review — but no actor bypasses the contract and evidence.
 
 ### What is it NOT?
 
@@ -70,3 +74,9 @@ Everything else is just movement.
 Lawman should own as little as possible. It reads authoritative state, evaluates the applicable contracts and policies, authorizes the next transition, and records why.
 
 The workers can change. The rules can change. The enforcement persists.
+
+## License
+
+Lawman is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 Scott Miller.
