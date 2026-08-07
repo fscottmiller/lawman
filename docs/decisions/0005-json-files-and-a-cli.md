@@ -1,6 +1,6 @@
 # 5. Three JSON files, one CLI
 
-Status: Accepted (2026-08-07)
+Status: Accepted (2026-08-07). Superseded in part by [ADR 6](0006-the-repository-picks-the-contract.md) (2026-08-07) — the contract is no longer a caller-supplied path, and there is no `--contract` flag. Everything else here stands, and the gap ADR 6 closes is the one described below.
 
 ## Context
 

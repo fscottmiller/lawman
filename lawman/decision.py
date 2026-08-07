@@ -1,8 +1,8 @@
-"""Intent -> Contract -> Evidence -> Decision.
+"""Contract -> Evidence -> Decision.
 
-The first executable slice of Lawman. It decides whether an intent may
-transition, and says why. It does not do the work, and it does not perform the
-transition.
+The evaluator. It decides whether an intent may transition, and says why. It
+does not choose the contract (that is `selection.py`), it does not do the work,
+and it does not perform the transition. Nothing here touches the filesystem.
 
 Two rules shape everything below. The argument for each is in docs/decisions/.
 
@@ -26,7 +26,10 @@ from typing import Any
 
 
 class LawmanError(ValueError):
-    """Input could not be understood. Lawman refuses to guess."""
+    """Input or configuration could not be understood. Lawman refuses to guess.
+
+    Never a denial. A denial is a `Decision` that was reached.
+    """
 
 
 @dataclass(frozen=True)
