@@ -14,7 +14,13 @@ Two rules shape everything below. The argument for each is in docs/decisions/.
 
 Invariants live in `__post_init__`, not in the parsers, so an invalid Intent,
 Contract, or Evidence cannot be constructed at all and `decide()` has nothing
-left to distrust. `from_dict` only unwraps JSON.
+left to distrust. `from_dict` only unwraps JSON — it never supplies a default
+for a key that was absent, because deciding that a missing key means an empty
+one is exactly the guess ADR 4 forbids.
+
+That is why the values pulled out of a document are annotated `Any`. The field
+types describe what a validated object holds; construction accepts whatever
+the JSON contained, and rejects it.
 """
 
 from __future__ import annotations
@@ -46,7 +52,9 @@ class Intent:
     @classmethod
     def from_dict(cls, data: Any) -> Intent:
         fields = _object(data, "intent")
-        return cls(action=fields.get("action"), target=fields.get("target"))
+        action: Any = fields.get("action")
+        target: Any = fields.get("target")
+        return cls(action=action, target=target)
 
     def __str__(self) -> str:
         return f"{self.action} -> {self.target}"
@@ -69,7 +77,8 @@ class Contract:
 
     @classmethod
     def from_dict(cls, data: Any) -> Contract:
-        return cls(requires=_object(data, "contract").get("requires"))
+        requires: Any = _object(data, "contract").get("requires")
+        return cls(requires=requires)
 
 
 @dataclass(frozen=True)

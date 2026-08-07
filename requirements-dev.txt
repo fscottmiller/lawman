@@ -1,0 +1,8 @@
+# Development tools only. Lawman itself still has no runtime dependencies —
+# `python -m lawman` needs nothing but Python 3.11 (ADR 2, ADR 7).
+#
+# Pinned exactly: a checker that changes its mind between runs is the problem
+# these tools were adopted to solve.
+mypy==2.3.0
+flake8==7.3.0
+isort==8.0.1
