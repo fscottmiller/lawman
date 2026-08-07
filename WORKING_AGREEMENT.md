@@ -16,7 +16,7 @@ Ponytail is an engineering discipline inspired by [Dietrich Gebert's Ponytail](h
 6. Can it be one line? Make it one line.
 7. Only then, write the minimum that works.
 
-The ladder runs after we understand the problem, not instead of understanding it. It applies to implementation choices within an established boundary. Choosing or replacing a boundary — such as a dependency at a seam, a provider, or an execution layer — is a tool choice governed by the next section.
+The ladder runs after we understand the problem, not instead of understanding it. It applies to implementation choices within an established boundary. Choosing or replacing a boundary — such as a dependency at a seam, a provider, or an execution layer — is a tool choice governed by *Choose the best tool for the job* below.
 
 Lazy means efficient, not careless: do not cut validation, error handling, security, accessibility, or anything explicitly requested. Prefer small abstractions and obvious next steps. Complexity must earn its place.
 
