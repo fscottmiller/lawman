@@ -6,13 +6,17 @@ It is a development preference, not a Lawman policy. It governs contributors to 
 
 ## Ponytail everything
 
-Use the lazy ladder:
+Ponytail is an engineering discipline inspired by [Dietrich Gebert's Ponytail](https://github.com/DietrichGebert/ponytail). It is YAGNI expanded into a practical decision ladder: stop at the first rung that solves the problem.
 
-1. Lead with the answer.
-2. Add only the detail needed to act.
-3. Put deeper explanation below the useful surface.
+1. Does this need to exist? If not, do not build it.
+2. Does it already exist in the codebase? Reuse it.
+3. Does the standard library solve it? Use it.
+4. Does a native platform feature solve it? Use it.
+5. Does an installed dependency solve it? Use it.
+6. Can it be one line? Make it one line.
+7. Only then, write the minimum that works.
 
-Prefer concise prose, small abstractions, and obvious next steps. Complexity must earn its place.
+The ladder runs after we understand the problem, not instead of understanding it. Lazy means efficient, not careless: do not cut validation, error handling, security, accessibility, or anything explicitly requested. Prefer concise prose, small abstractions, and obvious next steps. Complexity must earn its place.
 
 ## Choose the best tool for the job
 
@@ -26,9 +30,11 @@ Define the intent, contract, evidence, decision, and transition before designing
 
 Agents can help shape and execute work. They do not define their own acceptance criteria or decide whether their work is acceptable.
 
+For Lawman itself, agent-authored contributions follow the same review and evidence path as human-authored contributions.
+
 ## Evidence over assertion
 
-Every acceptance criterion maps to exactly one automated test. Every test runs in CI. Pull-request checks execute the complete relevant suite across the environments that matter.
+Every acceptance criterion maps to exactly one named automated test as its authoritative proof. A test may contain multiple cases or assertions, and related criteria may share a test when that is the clearest mapping. Every test runs in CI. Pull-request checks run the complete test suite; they do not selectively omit tests.
 
 Documentation should make claims that can be checked, and implementation decisions should leave enough evidence to explain what happened and why.
 
@@ -38,19 +44,6 @@ Prefer the smallest end-to-end capability that tests the model in reality. Do no
 
 This is a preference for how we build Lawman. It is not a requirement that Lawman impose minimal changes on its users.
 
-## Keep humans and agents on the same path
-
-The author may be a human, an agent, a tool, or a combination. The governance path remains the same:
-
-> Intent → Contract → Work → Evidence → Decision → Transition
-
-Actor identity may affect policy — for example, a contract may require human approval — but it never creates a bypass.
-
-## Agents are workers, not authorities
-
-Agents may propose, produce, refactor, test, and explain work. They do not get to reinterpret the contract, waive required evidence, or decide that their own work is acceptable.
-
 ## Record meaningful decisions
 
 When a decision is likely to matter again, record a short rationale close to the relevant code or documentation. Prefer a durable explanation over repeatedly rediscovering the same design question.
-

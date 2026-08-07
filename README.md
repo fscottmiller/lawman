@@ -74,3 +74,9 @@ Everything else is just movement.
 Lawman should own as little as possible. It reads authoritative state, evaluates the applicable contracts and policies, authorizes the next transition, and records why.
 
 The workers can change. The rules can change. The enforcement persists.
+
+## License
+
+Lawman is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 Scott Miller.
