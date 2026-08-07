@@ -75,6 +75,21 @@ Lawman should own as little as possible. It reads authoritative state, evaluates
 
 The workers can change. The rules can change. The enforcement persists.
 
+## What runs today
+
+The first executable slice: **Intent → Contract → Evidence → Decision**. Give Lawman an intent, a contract, and evidence, and it decides whether the transition is allowed and explains why.
+
+```bash
+python -m lawman \
+  --intent examples/deploy-to-production/intent.json \
+  --contract examples/deploy-to-production/contract.json \
+  --evidence examples/deploy-to-production/evidence.json
+```
+
+Work and Transition are not built yet.
+
+[How to run it](docs/running-lawman.md) · [Why it looks like this](docs/decisions/)
+
 ## License
 
 Lawman is licensed under the [Apache License 2.0](LICENSE).
