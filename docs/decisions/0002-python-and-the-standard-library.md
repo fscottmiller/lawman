@@ -1,6 +1,6 @@
 # 2. Python 3.11, standard library only
 
-Status: Accepted (2026-08-07)
+Status: Accepted (2026-08-07). Amended by [ADR 7](0007-check-types-and-style-in-ci.md) (2026-08-07) — development dependencies exist now (`mypy`, `flake8`, `isort`). No runtime dependency was added, and the test suite still runs with no install step.
 
 ## Context
 

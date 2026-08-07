@@ -96,6 +96,19 @@ Requirements are evaluated in contract order, so the same inputs always produce 
 python -m unittest discover -s tests
 ```
 
+No install step — running Lawman and testing it need nothing but Python 3.11.
+
+The type and style checks do need their tools, pinned in `requirements-dev.txt` and configured in `setup.cfg`:
+
+```bash
+pip install -r requirements-dev.txt
+python -m mypy                              # strict, over lawman/
+python -m flake8
+python -m isort --check-only lawman tests
+```
+
+CI runs both, in separate jobs. Why they are configured rather than left on defaults is [ADR 7](decisions/0007-check-types-and-style-in-ci.md).
+
 Every acceptance criterion has a named test.
 
 Deciding — `tests/test_decision.py`:
