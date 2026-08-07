@@ -20,6 +20,16 @@ Their lifetimes differ for the same reason. A contract is written once per gover
 
 So this does not multiply files by three. Per evaluation it is two ephemeral inputs rather than one, and the contract count grows with the number of things being governed, not with the number of runs.
 
+### Why not bundle the intent with the contract
+
+Of the three pairings this is the one to avoid hardest, because the intent is the request. Whoever raises it is the party asking for permission, so putting it in the same document as the contract hands the requester an edit on the rules — the concern above, at its sharpest rather than its mildest.
+
+It also assumes the intent is checked in. The examples in this repository do check one in, because they are examples. In a real integration the intent is raised per request — an agent finishes work and asks to deploy — and it is what will select which contract applies. Hardcoding it means a repository change to request anything new, and one file per intent-and-contract pair rather than one per intent plus one per contract. That is where files actually multiply.
+
+Reuse of a contract across intents is not hypothetical. `decide()` records the intent and never evaluates it, so today every contract already applies to every intent, and one `requires: ["tests_passed", "human_approved"]` file can govern `deploy -> production` and `rollback -> production` alike. Bundling forces a copy per intent.
+
+The honest counterargument is that the intent is inert right now — recorded and explained, never evaluated — so bundling would cost nothing yet. It would cost once intent selects the contract, and this is the first thing an integration touches.
+
 A single bundled `--case` file would be convenient for local experimentation and was deliberately not built. If it ever is, it must be a convenience for one person driving Lawman by hand, never a path by which a requester supplies its own contract.
 
 JSON rather than YAML because the standard library reads it (see ADR 2). This is the weakest decision here: contracts are the input humans actually hand-write, and YAML is kinder to write by hand. Revisit it when contracts are written by people often enough to hurt.
