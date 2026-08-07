@@ -1,0 +1,16 @@
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Invalid tokens return 401"
+    },
+    {
+      "id": "AC2",
+      "description": "Valid tokens return 200"
+    },
+    {
+      "id": "AC3",
+      "description": "Authentication failures emit an audit event"
+    }
+  ]
+}

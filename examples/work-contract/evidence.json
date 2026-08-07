@@ -1,0 +1,19 @@
+{
+  "evidence": [
+    {
+      "criterion_id": "AC1",
+      "source": "test_invalid_token",
+      "passed": true
+    },
+    {
+      "criterion_id": "AC2",
+      "source": "test_valid_token",
+      "passed": true
+    },
+    {
+      "criterion_id": "AC3",
+      "source": "test_authentication_audit_event",
+      "passed": true
+    }
+  ]
+}
