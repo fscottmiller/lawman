@@ -364,6 +364,14 @@ class HoldsItsInvariantsWhenConstructedDirectly(unittest.TestCase):
             lambda: CriterionResult(CRITERIA[0], CriterionEvidence("AC2", "test_valid_token", True)),
             lambda: CriterionResult(CRITERIA[0], CriterionEvidence("AC1", "test_valid_token", True)),
             lambda: WorkContractResult(()),
+            # Two results a contract could never have produced together: valid
+            # on their own, but sharing the source only one of them may bind.
+            lambda: WorkContractResult(
+                (
+                    CriterionResult(CRITERIA[0], None),
+                    CriterionResult(AcceptanceCriterion("AC9", "Another", CRITERIA[0].evidence_source), None),
+                )
+            ),
         )
         for construct in invalid_constructions:
             with self.subTest(construct=construct), self.assertRaises(LawmanError):

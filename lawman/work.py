@@ -176,6 +176,12 @@ class WorkContractResult:
         ids = [result.criterion.id for result in self.criteria]
         if len(ids) != len(set(ids)):
             raise LawmanError("work contract result criterion IDs must be unique")
+        # The contract's one-to-one rule holds here too: a result assembled
+        # from criteria that share a source is a result no contract could
+        # produce, and it would be serialized as if one had.
+        sources = [result.criterion.evidence_source for result in self.criteria]
+        if len(sources) != len(set(sources)):
+            raise LawmanError("work contract result evidence sources must be unique")
         object.__setattr__(self, "criteria", tuple(self.criteria))
 
     @property
