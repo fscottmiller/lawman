@@ -63,7 +63,13 @@ MAXIMUM_RESPONSE_BYTES = 1_048_576
 
 _BLOCK = re.compile(rf"(?m)^[ \t]*```[ \t]*{BLOCK_TAG}[ \t]*\n(.*?)\n[ \t]*```[ \t]*$", re.DOTALL)
 
-_REPOSITORY = re.compile(r"^/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/issues/([1-9][0-9]*)$")
+_NAME = r"[A-Za-z0-9._-]+"
+"""What a GitHub owner or repository name is made of."""
+
+_IS_NAME = re.compile(rf"^(?!\.+$){_NAME}$")
+"""And what one may not be: `.` or `..`, which are directories, not names."""
+
+_REPOSITORY = re.compile(rf"^/(?!\.+/)({_NAME})/(?!\.+/)({_NAME})/issues/([1-9][0-9]*)$")
 
 
 @dataclass(frozen=True)
@@ -74,11 +80,24 @@ class IssueReference:
     Shorthand (`owner/repo#8`), an API URL, a query, or a comment fragment are
     all refused rather than normalized: the URL is what the result claims as
     its source, so Lawman reports back exactly what it was asked for.
+
+    The invariants are enforced on construction, not only in the parser, so
+    code holding this type cannot assemble a reference the parser would have
+    refused. `.` and `..` are the reason: they are valid characters in a GitHub
+    name and a directory climb in the path this type builds.
     """
 
     owner: str
     repository: str
     number: int
+
+    def __post_init__(self) -> None:
+        for label, value in (("owner", self.owner), ("repository", self.repository)):
+            _require_name(value, f"issue {label}")
+            if not _IS_NAME.match(value):
+                raise LawmanError(f"issue {label} {value!r} is not a GitHub name")
+        if isinstance(self.number, bool) or not isinstance(self.number, int) or self.number < 1:
+            raise LawmanError(f"issue number must be a positive integer, not {self.number!r}")
 
     @property
     def url(self) -> str:
@@ -185,15 +204,25 @@ _OPENER = urllib.request.build_opener(_RefuseRedirects)
 
 
 def _get(reference: IssueReference) -> bytes:
-    """One authenticated GET, and whatever bytes come back."""
-    request = urllib.request.Request(reference.api_url, method="GET", headers=_headers())
+    """One authenticated GET, and whatever bytes come back.
+
+    The headers are built outside the guard, so a refusal about the token is
+    reported as itself rather than folded into the request failure below.
+    """
+    headers = _headers()
     try:
+        request = urllib.request.Request(reference.api_url, method="GET", headers=headers)
         with _OPENER.open(request, timeout=TIMEOUT_SECONDS) as response:
             body: bytes = response.read(MAXIMUM_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
         raise LawmanError(f"GitHub would not read {reference.url}: HTTP {error.code}") from error
     except (OSError, HTTPException) as error:
         raise LawmanError(f"cannot read {reference.url} from GitHub: {_reason(error)}") from error
+    except ValueError as error:
+        # urllib rejects a header or URL it will not send, and quotes it back
+        # verbatim — `Invalid header value b'Bearer ...'`. That value is the
+        # token. Neither the message nor the chained cause is kept.
+        raise LawmanError(f"cannot request {reference.url} from GitHub: {type(error).__name__}") from None
 
     if len(body) > MAXIMUM_RESPONSE_BYTES:
         raise LawmanError(f"GitHub returned more than {MAXIMUM_RESPONSE_BYTES} bytes for {reference.url}")
@@ -205,6 +234,11 @@ def _headers() -> dict[str, str]:
 
     An unauthenticated read is not an error — a public issue answers either
     way — so a missing token is left to GitHub to accept or refuse.
+
+    A token that is not a credential is refused here, before it reaches a
+    header. urllib validates header values on the way out and quotes the
+    offending one back in a `ValueError`, so a `GITHUB_TOKEN` carrying a
+    newline would print the token as part of its own error message.
     """
     headers = {
         "Accept": "application/vnd.github+json",
@@ -213,6 +247,11 @@ def _headers() -> dict[str, str]:
     }
     token = os.environ.get(TOKEN_VARIABLE, "").strip()
     if token:
+        if not all(" " < character <= "~" for character in token):
+            raise LawmanError(
+                f"{TOKEN_VARIABLE} is not a usable credential: it contains spaces, "
+                "control characters, or characters outside printable ASCII"
+            )
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
@@ -238,10 +277,11 @@ def _issue(raw: bytes, reference: IssueReference) -> Mapping[str, Any]:
     case, because GitHub does not distinguish them by case either.
     """
     try:
-        document = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
         raise LawmanError(f"GitHub's response for {reference.url} is not readable JSON") from error
 
+    document = _json(text, f"GitHub's response for {reference.url} is not readable JSON")
     issue = _object(document, f"GitHub's response for {reference.url}")
     if "pull_request" in issue:
         raise LawmanError(f"{reference.url} is a pull request, not an issue")
@@ -282,10 +322,23 @@ def _block(body: str, reference: IssueReference) -> str:
 
 
 def _document(text: str, reference: IssueReference) -> Any:
+    return _json(text, f"the {BLOCK_TAG} block in {reference.url} is not valid JSON", _unique_keys)
+
+
+def _json(text: str, complaint: str, pairs_hook: Any = None) -> Any:
+    """Parse JSON, or refuse. Not every unreadable document is a decode error.
+
+    `json.loads` also raises a bare `ValueError` for an integer past the
+    interpreter's digit limit, and `RecursionError` for a document nested
+    deeper than the stack. Both are reachable from a response Lawman did not
+    write, and an unhandled one is a traceback — which is not a refusal.
+    """
     try:
-        return json.loads(text, object_pairs_hook=_unique_keys)
-    except json.JSONDecodeError as error:
-        raise LawmanError(f"the {BLOCK_TAG} block in {reference.url} is not valid JSON: {error}") from error
+        return json.loads(text, object_pairs_hook=pairs_hook)
+    except LawmanError:
+        raise
+    except (ValueError, RecursionError) as error:
+        raise LawmanError(f"{complaint}: {_reason(error)}") from error
 
 
 def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

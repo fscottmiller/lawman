@@ -160,6 +160,14 @@ class GitHubIssueContractTest(unittest.TestCase):
         self.directory = self.enterContext(tempfile.TemporaryDirectory())
         self.evidence = evidence_file(self.directory, proving("AC1", "AC2", "AC3"))
 
+    def assertRefused(self, result, expected):
+        """Exit 2, nothing on stdout, one line on stderr. Never a work result."""
+        self.assertEqual(result.exit_code, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+        self.assertTrue(result.stderr.startswith("lawman: "), result.stderr)
+        self.assertIn(expected, result.stderr)
+
 
 class ReadsTheContractFromTheIssue(GitHubIssueContractTest):
     def test_issue_contract_uses_authenticated_read_only_get_without_leaking_token(self):
@@ -191,6 +199,39 @@ class ReadsTheContractFromTheIssue(GitHubIssueContractTest):
         for text in (authenticated.stdout, authenticated.stderr, refused.stdout, refused.stderr):
             self.assertNotIn(TOKEN, text)
         self.assertNotIn(TOKEN, json.dumps(authenticated.document))
+
+        # A token that is not a credential is refused before it becomes a
+        # header. urllib validates header values on the way out and quotes the
+        # offending one back — so an unchecked newline would print the token.
+        poisoned = {
+            "a newline": f"{TOKEN}\nX-Injected: yes",
+            "a carriage return": f"{TOKEN}\r\nX-Injected: yes",
+            "a bare carriage return": f"{TOKEN}\rX-Injected: yes",
+            "an inner space": f"{TOKEN} extra",
+            "a tab": f"{TOKEN}\textra",
+            "a vertical tab": f"{TOKEN}\vextra",
+            "a control character": f"{TOKEN}\x7f",
+            "something not ASCII": f"{TOKEN} extra",
+        }
+        for situation, value in poisoned.items():
+            with self.subTest(situation=situation), fake_github.serving(fake_github.issue(body())) as server:
+                spoiled = work(server.origin, self.evidence, token=value)
+
+                # Refused before the request, so the value never reached a socket.
+                self.assertEqual(server.received, [])
+
+            self.assertRefused(spoiled, f"{TOKEN_VARIABLE} is not a usable credential")
+            self.assertNotIn(TOKEN, spoiled.stderr)
+            self.assertNotIn("X-Injected", spoiled.stderr)
+
+        # And if a header value ever gets past that check, urllib's own
+        # complaint — which quotes the value — is still not what gets printed.
+        with mock.patch.object(github, "_headers", return_value={"Authorization": f"Bearer {TOKEN}\nX: y"}):
+            with fake_github.serving(fake_github.issue(body())) as server:
+                unsent = work(server.origin, self.evidence)
+
+        self.assertRefused(unsent, "cannot request")
+        self.assertNotIn(TOKEN, unsent.stderr)
 
         # And no argument accepts one, so it cannot reach a process list either.
         help_text = cli("work", "--help").stdout
@@ -396,13 +437,6 @@ class SaysWhichContractItJudged(GitHubIssueContractTest):
 class RefusesAnythingItCannotReadAsAContract(GitHubIssueContractTest):
     """Exit 2, nothing on stdout, one line on stderr. Never a work result."""
 
-    def assertRefused(self, result, expected):
-        self.assertEqual(result.exit_code, 2)
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
-        self.assertTrue(result.stderr.startswith("lawman: "), result.stderr)
-        self.assertIn(expected, result.stderr)
-
     def test_missing_duplicate_or_malformed_contract_blocks_are_refused(self):
         """AC4. No block, two blocks, unreadable JSON, or a contract the domain refuses."""
         bodies = {
@@ -440,6 +474,16 @@ class RefusesAnythingItCannotReadAsAContract(GitHubIssueContractTest):
                 body(contract='{"criteria": ["AC1"]}'),
                 "work contract criterion must be an object",
             ),
+            # Not every unreadable document is a decode error: these two raise
+            # a bare ValueError and a RecursionError out of `json.loads`.
+            "an integer past the digit limit": (
+                body(contract='{"criteria": ' + "9" * 5000 + "}"),
+                "is not valid JSON",
+            ),
+            "nested deeper than the stack": (
+                body(contract="[" * 60_000 + "]" * 60_000),
+                "is not valid JSON",
+            ),
         }
         for situation, (text, expected) in bodies.items():
             with self.subTest(situation=situation), fake_github.serving(fake_github.issue(text)) as server:
@@ -464,6 +508,10 @@ class RefusesAnythingItCannotReadAsAContract(GitHubIssueContractTest):
             "not a number": ISSUE_URL.replace("/8", "/eight"),
             "issue zero": ISSUE_URL.replace("/8", "/0"),
             "a path climb": ISSUE_URL.replace("/issues/8", "/issues/../../other/repo/issues/8"),
+            "an owner that climbs out": "https://github.com/../lawman/issues/8",
+            "a repository that climbs out": f"https://github.com/{fake_github.OWNER}/../issues/8",
+            "an owner that is a directory": "https://github.com/./lawman/issues/8",
+            "a repository that is a directory": f"https://github.com/{fake_github.OWNER}/./issues/8",
             "no repository": f"https://github.com/{fake_github.OWNER}/issues/8",
             "an empty URL": "   ",
         }
@@ -486,6 +534,14 @@ class RefusesAnythingItCannotReadAsAContract(GitHubIssueContractTest):
             ),
             "not JSON": ({"body": "<html>not json</html>"}, "is not readable JSON"),
             "not text": ({"body": b"\xff\xfe{}"}, "is not readable JSON"),
+            "an integer past the digit limit": (
+                {"body": '{"number": ' + "9" * 5000 + "}"},
+                "is not readable JSON",
+            ),
+            "nested deeper than the stack": (
+                {"body": "[" * 60_000 + "]" * 60_000},
+                "is not readable JSON",
+            ),
             "not an object": ({"body": [{"body": "..."}]}, "must be an object"),
             "a pull request in disguise": (
                 {"body": fake_github.issue(body(), pull_request={"url": "..."})},
@@ -605,19 +661,48 @@ class TheContractSourceIsTheOnlyThingItProves(GitHubIssueContractTest):
             self.assertEqual(work(server.origin, self.evidence).exit_code, 0)
 
 
-class HoldsItsInvariantsWhenConstructedDirectly(unittest.TestCase):
+class HoldsItsInvariantsWhenConstructedDirectly(GitHubIssueContractTest):
     def test_direct_construction_cannot_bypass_domain_invariants(self):
         for url in ("", "   ", None, 8, "https://github.com/o/r/pull/1"):
             with self.subTest(url=url), self.assertRaises(LawmanError):
                 IssueReference.from_url(url)
 
+        # The same invariants hold for code that builds a reference rather than
+        # parsing one. `..` is a GitHub-legal character and a directory climb
+        # in the path this type assembles, so it cannot be constructed either.
+        invalid_constructions = (
+            lambda: IssueReference("..", "lawman", 8),
+            lambda: IssueReference("fscottmiller", "..", 8),
+            lambda: IssueReference(".", "lawman", 8),
+            lambda: IssueReference("fscottmiller", "...", 8),
+            lambda: IssueReference("", "lawman", 8),
+            lambda: IssueReference("   ", "lawman", 8),
+            lambda: IssueReference("fscottmiller/other", "lawman", 8),
+            lambda: IssueReference("fscottmiller", "lawman?x=1", 8),
+            lambda: IssueReference(None, "lawman", 8),
+            lambda: IssueReference("fscottmiller", "lawman", 0),
+            lambda: IssueReference("fscottmiller", "lawman", -1),
+            lambda: IssueReference("fscottmiller", "lawman", "8"),
+            lambda: IssueReference("fscottmiller", "lawman", True),
+        )
+        for construct in invalid_constructions:
+            with self.subTest(construct=construct), self.assertRaises(LawmanError):
+                construct()
+
         reference = IssueReference.from_url(ISSUE_URL)
         self.assertEqual(reference.url, ISSUE_URL)
         self.assertEqual(reference.number, 8)
-        self.assertTrue(reference.api_url.startswith("https://api.github.com/repos/"))
+        self.assertEqual(reference.api_url, "https://api.github.com/repos/fscottmiller/lawman/issues/8")
 
-        with self.assertRaises(LawmanError):
-            issue_contract("not a url")
+        # A dot segment is refused before anything is requested, whether it
+        # arrives as a URL or as a hand-built reference.
+        with fake_github.serving(fake_github.issue(body())) as server:
+            with mock.patch("lawman.github.API_ORIGIN", server.origin):
+                for url in ("not a url", "https://github.com/../lawman/issues/8"):
+                    with self.subTest(url=url), self.assertRaises(LawmanError):
+                        issue_contract(url)
+
+            self.assertEqual(server.received, [])
 
 
 if __name__ == "__main__":

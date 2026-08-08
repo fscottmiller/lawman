@@ -56,6 +56,8 @@ Later policy can therefore ask whether the contract that was judged is the contr
 
 One REST `GET` of the named issue. No comments, no timeline, no search, no writes. `GITHUB_TOKEN` is read from the environment when present, never from an argument, and never printed — not in a result, not in a diagnostic. Redirects are refused rather than followed, because urllib would resend the token to wherever the redirect points.
 
+"Never printed" has to be enforced, not assumed. A token carrying whitespace or a control character is refused before it becomes a header, because the HTTP layer rejects an illegal header value with an error that quotes the whole value — which is the credential. The same reasoning applies to the issue URL: `.` and `..` are legal characters in a GitHub name and a directory climb in the path Lawman assembles, so an issue reference cannot be built from them at all, whether it was parsed or constructed in code.
+
 ### Refusal semantics are unchanged
 
 Exit `2`, no result on stdout, one line on stderr: a non-canonical URL, a pull-request URL, an inaccessible issue, an HTTP error, a network failure, a timeout, a response that is not the issue that was asked for, a missing or duplicated block, invalid JSON, duplicate JSON keys, or content the existing `WorkContract` invariants refuse. Exit `1` still means a contract was read and its criteria were not all proven.

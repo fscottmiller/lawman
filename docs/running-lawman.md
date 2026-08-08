@@ -104,7 +104,7 @@ The block holds exactly what a `--contract` file holds. Everything else in the i
 GITHUB_TOKEN="$(gh auth token)" python -m lawman work --issue "$ISSUE_URL" --evidence evidence.json
 ```
 
-No argument accepts a token, and no token is ever printed — not in a result, not in a diagnostic. A public issue reads without one. Lawman makes exactly one request: a REST `GET` of the named issue. It reads no comments, follows no redirects, and writes nothing.
+No argument accepts a token, and no token is ever printed — not in a result, not in a diagnostic. A `GITHUB_TOKEN` carrying whitespace or control characters is refused before any request is made, because the HTTP layer's own complaint about an illegal header value quotes that value back. A public issue reads without one. Lawman makes exactly one request: a REST `GET` of the named issue. It reads no comments, follows no redirects, and writes nothing.
 
 ### What the result says about its source
 
