@@ -9,15 +9,16 @@ These instructions apply to every agent working in this repository.
 3. Start from the latest `main` on a focused branch.
 4. Treat the issue's `lawman-work-contract` block as the authoritative definition of done.
 
-If the issue has no contract, or its contract is missing or ambiguous, stop and ask. Do not invent acceptance criteria.
+If the issue's contract is missing or ambiguous, stop and ask. Do not invent acceptance criteria.
 
 ## Build
 
 - Stay within the assigned issue.
-- Follow Ponytail: stop at the first complete solution.
+- Follow Ponytail: stop at the first rung that solves the problem — reuse before you build.
 - Preserve Lawman's domain boundaries and fail-closed behavior.
 - Give every acceptance criterion explicit, named automated evidence.
 - Keep the AC-to-evidence mapping clear enough for another agent to verify.
+- Record a short ADR under `docs/decisions/` for decisions likely to matter again.
 - Do not weaken existing behavior or checks to make the change pass.
 
 Run the complete local checks:
