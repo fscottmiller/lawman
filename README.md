@@ -99,6 +99,16 @@ python -m lawman work \
   --evidence examples/work-contract/evidence.json
 ```
 
+The contract can also come from the GitHub Issue that ordered the work, so the criteria are not written by whoever claims to have met them:
+
+```bash
+python -m lawman work \
+  --issue https://github.com/fscottmiller/lawman/issues/8 \
+  --evidence evidence.json
+```
+
+The issue states its contract in one fenced `lawman-work-contract` block, and the result records which issue it read and a hash of the exact contract it judged.
+
 Satisfying a work contract proves the work is done. It does not authorize a transition. Transition execution is not built yet.
 
 [How to run it](docs/running-lawman.md) · [Why it looks like this](docs/decisions/)

@@ -2,7 +2,7 @@
 
 Lawman makes two separate calls:
 
-* **Work Contract → Evidence → Work Contract Result** asks whether one piece of work met its acceptance criteria.
+* **Work Contract → Evidence → Work Contract Result** asks whether one piece of work met its acceptance criteria. The contract comes from a local file or from the GitHub Issue that ordered the work.
 * **Intent → Policy Selection → OPA → Decision** asks whether policy allows a transition.
 
 A satisfied work contract does not authorize a transition. Policy still decides what is allowed. Transition execution is not built yet.
@@ -64,6 +64,95 @@ The result is satisfied only when every criterion is proven. Missing evidence fa
 Results follow contract order and include the criterion ID, description, status, evidence source, and explanation. Use `evidence-missing-audit.json` to see an explained `unproven` result.
 
 This command needs no OPA. Work contracts are Lawman's own model, and they are not transition policy ([ADR 8](decisions/0008-work-contracts-are-separate-from-transition-policy.md)).
+
+## Work contracts from a GitHub Issue
+
+A local contract file is written by whoever runs Lawman. An issue is not. Point Lawman at the issue that ordered the work, and the criteria come from there ([ADR 10](decisions/0010-work-contracts-can-come-from-github-issues.md)):
+
+```bash
+python -m lawman work \
+  --issue https://github.com/fscottmiller/lawman/issues/8 \
+  --evidence evidence.json
+```
+
+`--contract` and `--issue` are alternatives. Exactly one is required, and `--evidence` is always required.
+
+### The exact issue syntax
+
+The issue body may be any prose you like, and it must contain **exactly one** fenced block tagged `lawman-work-contract`:
+
+````markdown
+Some prose explaining the work. None of this is read.
+
+```lawman-work-contract
+{
+  "criteria": [
+    { "id": "AC1", "description": "Invalid tokens return 401" },
+    { "id": "AC2", "description": "Valid tokens return 200" }
+  ]
+}
+```
+````
+
+The block holds exactly what a `--contract` file holds. Everything else in the issue — prose, headings, task lists, other fenced blocks, labels, comments, title, assignees — is ignored. Nothing is inferred: **a checklist is not acceptance criteria.**
+
+### Authentication
+
+`GITHUB_TOKEN` is read from the environment when it is set, and sent as a bearer token:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" python -m lawman work --issue "$ISSUE_URL" --evidence evidence.json
+```
+
+No argument accepts a token, and no token is ever printed — not in a result, not in a diagnostic. A `GITHUB_TOKEN` carrying whitespace or control characters is refused before any request is made, because the HTTP layer's own complaint about an illegal header value quotes that value back. A public issue reads without one. Lawman makes exactly one request: a REST `GET` of the named issue. It reads no comments, follows no redirects, and writes nothing.
+
+### What the result says about its source
+
+A GitHub-backed result adds `contract_source` in front of the usual document:
+
+```json
+{
+  "contract_source": {
+    "type": "github_issue",
+    "url": "https://github.com/fscottmiller/lawman/issues/8",
+    "node_id": "I_kwDOexample",
+    "updated_at": "2026-08-08T00:00:00Z",
+    "contract_sha256": "sha256:c5d300a28bde0b9bd788f5b5ea90c4f02681416e76f045e7c57fa13954105433"
+  },
+  "satisfied": false,
+  "criteria": []
+}
+```
+
+* `node_id` says **which issue**, permanently. It survives renaming the repository or the owner; the URL does not.
+* `contract_sha256` says **which contract**. It is a SHA-256 of the normalized semantic contract: criteria in issue order, each reduced to `id` and `description`, sorted keys, compact separators, UTF-8, lowercase hex. Rewording the prose or reindenting the JSON does not move it; changing a criterion does.
+* `updated_at` is trace information, not identity. Any edit to the issue moves it.
+
+The local `--contract` result is unchanged and carries no `contract_source`.
+
+### What is refused
+
+Exit `2`, nothing on stdout, one line on stderr:
+
+| Situation | Exit |
+| --- | --- |
+| the URL is not `https://github.com/{owner}/{repo}/issues/{number}` | `2` |
+| the URL names a pull request, or carries a query or a `#comment` fragment | `2` |
+| the issue has no `lawman-work-contract` block, or more than one | `2` |
+| the block is not valid JSON, or repeats a JSON key | `2` |
+| the contract violates the usual work-contract rules — no criteria, duplicate IDs, blank description | `2` |
+| the issue is inaccessible, or GitHub returns an HTTP error | `2` |
+| the network fails, the read times out, or GitHub redirects elsewhere | `2` |
+| GitHub answers with a different issue than the one requested | `2` |
+| evidence names a criterion the issue does not | `2` |
+
+A valid contract behaves exactly as a local one: exit `0` when every criterion is proven, exit `1` when one is not.
+
+### What this does and does not prove
+
+The contract came from the identified issue rather than from caller-controlled local input. That is all "authoritative" means here.
+
+**Reading an issue does not prove the caller chose the right issue**, and a satisfied issue contract still authorizes nothing. This command reaches no policy and runs no OPA; the source identity is there so later policy can check the relationship itself, instead of trusting an unbound `work_satisfied: true`.
 
 ## Transition policy
 
@@ -247,7 +336,22 @@ Working — `tests/test_work.py`:
 | direct construction preserves invariants | `HoldsItsInvariantsWhenConstructedDirectly.test_direct_construction_cannot_bypass_domain_invariants` |
 | results are immutable | `HoldsItsInvariantsWhenConstructedDirectly.test_results_are_immutable_after_construction` |
 
-`tests/test_work_cli.py` covers the same capability through `python -m lawman work`, including exit codes and byte-identical output. `tests/test_cli.py`'s `TheWorkCommandIsUntouched` proves it still runs with no OPA on `PATH`.
+`tests/test_work_cli.py` covers the same capability through `python -m lawman work`, including exit codes and byte-identical output — `test_local_work_contract_command_remains_byte_identical` pins the local result's exact bytes. `tests/test_cli.py`'s `TheWorkCommandIsUntouched` proves it still runs with no OPA on `PATH`.
+
+Reading an issue — `tests/test_github.py`, against a local stand-in GitHub (`tests/fake_github.py`), never a live issue:
+
+| Behavior | Test |
+| --- | --- |
+| exactly one of `--contract` and `--issue`, and always `--evidence` | `TheContractSourceIsTheOnlyThingItProves.test_work_requires_exactly_one_contract_source` |
+| one authenticated `GET`, and the token never leaves the environment | `ReadsTheContractFromTheIssue.test_issue_contract_uses_authenticated_read_only_get_without_leaking_token` |
+| only the single tagged block is read | `ReadsTheContractFromTheIssue.test_only_the_single_tagged_contract_block_is_parsed` |
+| missing, duplicated, or malformed blocks → refuse | `RefusesAnythingItCannotReadAsAContract.test_missing_duplicate_or_malformed_contract_blocks_are_refused` |
+| bad URLs, HTTP errors, timeouts, and mismatched responses → refuse | `RefusesAnythingItCannotReadAsAContract.test_invalid_urls_and_github_failures_are_refused` |
+| the existing work model decides it | `ReadsTheContractFromTheIssue.test_issue_contract_uses_existing_work_evaluation_semantics` |
+| source identity is bound to the contract's content | `SaysWhichContractItJudged.test_issue_contract_source_has_content_bound_identity` |
+| satisfied exits `0`, unsatisfied exits `1` | `SaysWhichContractItJudged.test_issue_contract_returns_satisfied_and_unsatisfied_results` |
+| identical responses produce identical bytes | `SaysWhichContractItJudged.test_issue_contract_output_is_byte_identical_across_runs` |
+| no policy is selected, and no transition is authorized | `TheContractSourceIsTheOnlyThingItProves.test_issue_contract_evaluation_does_not_invoke_transition_policy` |
 
 Deciding — `tests/test_opa.py`:
 
@@ -272,7 +376,7 @@ Selecting — `tests/test_selection.py`:
 
 `tests/test_cli.py` covers exit codes, byte-identical output across runs, and `TheCallerCannotChooseTheRules` — that no `--policy`, `--contract`, `--data`, or `--query` flag exists, and that the policy OPA is handed is the repository's, not one sitting beside the requester's files.
 
-`tests/test_docs.py` checks that this guide and ADR 9 still describe the interface the code actually has.
+`tests/test_docs.py` checks that this guide, ADR 9, and ADR 10 still describe the interface the code actually has.
 
 ## Why it looks like this
 

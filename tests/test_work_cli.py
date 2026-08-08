@@ -57,6 +57,48 @@ class WorkContractCommand(unittest.TestCase):
 
         self.assertEqual(first.stdout, second.stdout)
 
+    def test_local_work_contract_command_remains_byte_identical(self):
+        """AC10 of #8. A local contract reads exactly as it did before issues existed."""
+        expected = json.dumps(
+            {
+                "satisfied": True,
+                "criteria": [
+                    {
+                        "id": criterion_id,
+                        "description": description,
+                        "status": "proven",
+                        "source": source,
+                        "explanation": f"Proven by {source}.",
+                    }
+                    for criterion_id, description, source in (
+                        ("AC1", "Invalid tokens return 401", "test_invalid_token"),
+                        ("AC2", "Valid tokens return 200", "test_valid_token"),
+                        (
+                            "AC3",
+                            "Authentication failures emit an audit event",
+                            "test_authentication_audit_event",
+                        ),
+                    )
+                ],
+            },
+            indent=2,
+        )
+
+        result = run()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, expected + "\n")
+
+        # A local contract identifies itself, so nothing is added to say where
+        # it came from. `contract_source` belongs to a GitHub-backed result.
+        self.assertEqual(list(json.loads(result.stdout)), ["satisfied", "criteria"])
+        self.assertNotIn("contract_source", result.stdout)
+
+        unsatisfied = run(evidence=EXAMPLE / "evidence-missing-audit.json")
+
+        self.assertEqual(unsatisfied.returncode, 1)
+        self.assertEqual(list(json.loads(unsatisfied.stdout)), ["satisfied", "criteria"])
+
 
 if __name__ == "__main__":
     unittest.main()
