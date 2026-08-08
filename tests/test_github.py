@@ -35,14 +35,15 @@ ISSUE_URL = f"https://github.com/{fake_github.OWNER}/{fake_github.REPOSITORY}/is
 TOKEN = "ghs_a-token-that-must-never-be-printed"
 
 CRITERIA = [
-    {"id": "AC1", "description": "The issue supplies the acceptance criteria"},
-    {"id": "AC2", "description": "Evidence names one traceable source"},
-    {"id": "AC3", "description": "Silence is not proof"},
+    {"id": "AC1", "description": "The issue supplies the acceptance criteria", "evidence_source": "test_ac1"},
+    {"id": "AC2", "description": "Evidence names one traceable source", "evidence_source": "test_ac2"},
+    {"id": "AC3", "description": "Silence is not proof", "evidence_source": "test_ac3"},
 ]
 
 # The hash of CRITERIA, as a reader can recompute it: criteria in issue order,
-# each reduced to id and description, sorted keys, compact separators, UTF-8.
-CANONICAL_SHA256 = "sha256:c5d300a28bde0b9bd788f5b5ea90c4f02681416e76f045e7c57fa13954105433"
+# each reduced to id, description, and evidence_source, sorted keys, compact
+# separators, UTF-8.
+CANONICAL_SHA256 = "sha256:6a1e09b344ecc7219ade4e2a9e67abce96430b7439d29d2abe21b0a0ff680636"
 
 PROSE = f"""## Outcome
 
@@ -86,9 +87,26 @@ def body(contract=None, prose=PROSE, trailing=TRAILING, tag=BLOCK_TAG):
 
 
 def digest(criteria):
-    normalized = {"criteria": [{"description": item["description"], "id": item["id"]} for item in criteria]}
+    normalized = {
+        "criteria": [
+            {"description": item["description"], "evidence_source": item["evidence_source"], "id": item["id"]}
+            for item in criteria
+        ]
+    }
     encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def renamed(criteria, old, new):
+    """The same contract with one criterion renumbered, binding and all."""
+    return [
+        {
+            **item,
+            "id": item["id"].replace(old, new),
+            "evidence_source": item["evidence_source"].replace(old.lower(), new.lower()),
+        }
+        for item in criteria
+    ]
 
 
 @contextlib.contextmanager
@@ -279,8 +297,8 @@ class ReadsTheContractFromTheIssue(GitHubIssueContractTest):
             self.assertEqual(accepted.exit_code, 0, accepted.stderr)
             self.assertEqual([item["id"] for item in accepted.document["criteria"]], ["AC1", "AC2", "AC3"])
 
-    def test_issue_contract_uses_existing_work_evaluation_semantics(self):
-        """AC6. The same domain model decides it, so nothing about judging work moved."""
+    def test_local_and_github_contracts_bind_evidence_identically(self):
+        """AC9 of #12, AC6 of #8. One domain model, one binding rule, two sources."""
         entries = proving("AC1", "AC2", "AC3", failed=("AC2",), missing=("AC3",))
         evidence = evidence_file(self.directory, list(reversed(entries)), name="mixed.json")
 
@@ -295,9 +313,16 @@ class ReadsTheContractFromTheIssue(GitHubIssueContractTest):
         # the same keys and the same explanations a local contract produces.
         self.assertEqual([item["id"] for item in document["criteria"]], ["AC1", "AC2", "AC3"])
         self.assertEqual([item["status"] for item in document["criteria"]], ["proven", "failed", "unproven"])
-        self.assertEqual(set(document["criteria"][0]), {"id", "description", "status", "source", "explanation"})
+        self.assertEqual(
+            list(document["criteria"][0]),
+            ["id", "description", "evidence_source", "status", "source", "explanation"],
+        )
+        self.assertEqual(
+            [item["evidence_source"] for item in document["criteria"]],
+            ["test_ac1", "test_ac2", "test_ac3"],
+        )
         self.assertEqual(document["criteria"][1]["explanation"], "Failed: test_ac2 reported failure.")
-        self.assertEqual(document["criteria"][2]["explanation"], "Unproven: no evidence was provided.")
+        self.assertEqual(document["criteria"][2]["explanation"], "Unproven: no evidence from test_ac3 was provided.")
         self.assertIsNone(document["criteria"][2]["source"])
 
         # An issue-supplied contract is the same contract: byte for byte, the
@@ -309,14 +334,44 @@ class ReadsTheContractFromTheIssue(GitHubIssueContractTest):
         self.assertEqual(from_file.document["criteria"], document["criteria"])
         self.assertEqual(from_file.exit_code, result.exit_code)
 
-        # Evidence for a criterion the issue does not name is still refused.
-        unknown = evidence_file(self.directory, proving("AC1", "AC2", "AC3", "AC7"), name="unknown.json")
-        with fake_github.serving(fake_github.issue(body())) as server:
-            refused = work(server.origin, unknown)
+        # `contract_source` is the only thing the GitHub path adds.
+        self.assertEqual(list(document), ["contract_source", "satisfied", "criteria"])
+        self.assertEqual(list(from_file.document), ["satisfied", "criteria"])
 
-        self.assertEqual(refused.exit_code, 2)
-        self.assertEqual(refused.stdout, "")
-        self.assertIn("unknown criteria: AC7", refused.stderr)
+        # The binding is refused the same way from either source: a criterion
+        # the contract does not name, and a source it did not bind.
+        misbound = [{"criterion_id": "AC1", "source": "test_ac2", "passed": True}]
+        for situation, entries in (
+            ("an unknown criterion", proving("AC1", "AC2", "AC3", "AC7")),
+            ("a source the contract did not bind", misbound),
+        ):
+            with self.subTest(situation=situation):
+                presented = evidence_file(self.directory, entries, name=f"{situation.replace(' ', '-')}.json")
+                with fake_github.serving(fake_github.issue(body())) as server:
+                    from_issue = work(server.origin, presented)
+                refused = run(["work", "--contract", local, "--evidence", presented])
+
+                self.assertEqual((from_issue.exit_code, from_issue.stdout), (2, ""))
+                self.assertEqual((refused.exit_code, refused.stdout), (2, ""))
+                self.assertEqual(from_issue.stderr, refused.stderr)
+
+        # And a contract the binding rules refuse is refused from the issue too.
+        for situation, criteria in (
+            ("no evidence source", [{"id": "AC1", "description": "Unbound"}]),
+            (
+                "a shared evidence source",
+                [
+                    {"id": "AC1", "description": "First", "evidence_source": "test_everything"},
+                    {"id": "AC2", "description": "Second", "evidence_source": "test_everything"},
+                ],
+            ),
+        ):
+            with self.subTest(situation=situation):
+                payload = fake_github.issue(body(contract=contract_json(criteria)))
+                with fake_github.serving(payload) as server:
+                    unbound = work(server.origin, self.evidence)
+
+                self.assertRefused(unbound, "evidence_source" if len(criteria) == 1 else "must be unique")
 
 
 class SaysWhichContractItJudged(GitHubIssueContractTest):
@@ -340,7 +395,10 @@ class SaysWhichContractItJudged(GitHubIssueContractTest):
         # Presentation is not identity. Rewording the prose around the block,
         # reindenting the JSON, reordering its keys, or touching the issue all
         # leave the contract, and its hash, alone.
-        reordered = [{"description": item["description"], "id": item["id"]} for item in CRITERIA]
+        reordered = [
+            {"evidence_source": item["evidence_source"], "description": item["description"], "id": item["id"]}
+            for item in CRITERIA
+        ]
         unchanged = {
             "different prose": fake_github.issue(body(prose="# Nothing like the original prose\n")),
             "different indentation": fake_github.issue(body(contract=contract_json(indent=8))),
@@ -361,9 +419,12 @@ class SaysWhichContractItJudged(GitHubIssueContractTest):
         rewritten[1]["description"] = "Evidence names one traceable source, eventually"
         changed = {
             "a reworded criterion": rewritten,
-            "a renamed criterion": [{**item, "id": item["id"].replace("AC3", "AC4")} for item in CRITERIA],
+            "a renamed criterion": renamed(CRITERIA, "AC3", "AC4"),
             "a reordered contract": list(reversed(CRITERIA)),
-            "an added criterion": [*CRITERIA, {"id": "AC4", "description": "One more obligation"}],
+            "an added criterion": [
+                *CRITERIA,
+                {"id": "AC4", "description": "One more obligation", "evidence_source": "test_ac4"},
+            ],
         }
         for situation, criteria in changed.items():
             with self.subTest(situation=situation):
@@ -393,10 +454,76 @@ class SaysWhichContractItJudged(GitHubIssueContractTest):
 
         # The node ID identifies the issue itself, whatever its URL says today.
         with fake_github.serving(fake_github.issue(body(), node_id="I_kwDOrenamed")) as server:
-            renamed = work(server.origin, self.evidence)
+            moved = work(server.origin, self.evidence)
 
-        self.assertEqual(renamed.document["contract_source"]["node_id"], "I_kwDOrenamed")
-        self.assertEqual(renamed.document["contract_source"]["url"], ISSUE_URL)
+        self.assertEqual(moved.document["contract_source"]["node_id"], "I_kwDOrenamed")
+        self.assertEqual(moved.document["contract_source"]["url"], ISSUE_URL)
+
+    def test_contract_identity_is_bound_to_required_evidence(self):
+        """AC8. The binding is part of the obligation, so it is part of the hash."""
+        rebound = [{**item, "evidence_source": f"{item['evidence_source']}_v2"} for item in CRITERIA]
+        one_rebound = [CRITERIA[0], CRITERIA[1], {**CRITERIA[2], "evidence_source": "test_audit_event"}]
+        swapped = [
+            {**CRITERIA[0], "evidence_source": CRITERIA[1]["evidence_source"]},
+            {**CRITERIA[1], "evidence_source": CRITERIA[0]["evidence_source"]},
+            CRITERIA[2],
+        ]
+
+        for situation, criteria in (
+            ("every binding rewritten", rebound),
+            ("one binding rewritten", one_rebound),
+            ("two bindings swapped", swapped),
+        ):
+            with self.subTest(situation=situation):
+                evidence = evidence_file(
+                    self.directory,
+                    [
+                        {"criterion_id": item["id"], "source": item["evidence_source"], "passed": True}
+                        for item in criteria
+                    ],
+                    name=f"{situation.replace(' ', '-')}.json",
+                )
+                payload = fake_github.issue(body(contract=contract_json(criteria)))
+                with fake_github.serving(payload) as server:
+                    result = work(server.origin, evidence)
+
+                self.assertEqual(result.exit_code, 0, result.stderr)
+                fingerprint = result.document["contract_source"]["contract_sha256"]
+
+                # The IDs and descriptions are identical to CRITERIA; only the
+                # bindings moved, and that is a different contract.
+                self.assertEqual(
+                    [(item["id"], item["description"]) for item in criteria],
+                    [(item["id"], item["description"]) for item in CRITERIA],
+                )
+                self.assertEqual(fingerprint, digest(criteria))
+                self.assertNotEqual(fingerprint, CANONICAL_SHA256)
+
+        # Presentation still is not identity. The same bindings, spelled
+        # differently in the JSON, hash to the same contract.
+        formatted = {
+            "reindented": contract_json(indent=8),
+            "compact": contract_json(indent=None),
+            "keys reordered": json.dumps(
+                {
+                    "criteria": [
+                        {
+                            "evidence_source": item["evidence_source"],
+                            "id": item["id"],
+                            "description": item["description"],
+                        }
+                        for item in CRITERIA
+                    ]
+                }
+            ),
+        }
+        for situation, contract in formatted.items():
+            with self.subTest(situation=situation):
+                with fake_github.serving(fake_github.issue(body(contract=contract))) as server:
+                    same = work(server.origin, self.evidence)
+
+                self.assertEqual(same.exit_code, 0, same.stderr)
+                self.assertEqual(same.document["contract_source"]["contract_sha256"], CANONICAL_SHA256)
 
     def test_issue_contract_returns_satisfied_and_unsatisfied_results(self):
         """AC8. Exit 0 satisfied, exit 1 not, and both account for every criterion."""
@@ -463,12 +590,28 @@ class RefusesAnythingItCannotReadAsAContract(GitHubIssueContractTest):
             "no criteria": (body(contract='{"criteria": []}'), "at least one criterion"),
             "criteria is not a list": (body(contract='{"criteria": {"AC1": "First"}}'), "must be a list"),
             "duplicate criterion ids": (
-                body(contract=contract_json([CRITERIA[0], {"id": "AC1", "description": "Again"}])),
+                body(
+                    contract=contract_json(
+                        [CRITERIA[0], {"id": "AC1", "description": "Again", "evidence_source": "test_again"}]
+                    )
+                ),
                 "criterion IDs must be unique",
             ),
+            "duplicate evidence sources": (
+                body(contract=contract_json([CRITERIA[0], {**CRITERIA[1], "evidence_source": "test_ac1"}])),
+                "evidence sources must be unique",
+            ),
             "a blank description": (
-                body(contract=contract_json([{"id": "AC1", "description": "  "}])),
+                body(contract=contract_json([{"id": "AC1", "description": "  ", "evidence_source": "test_ac1"}])),
                 "must be a non-empty string",
+            ),
+            "no evidence source": (
+                body(contract=contract_json([{"id": "AC1", "description": "Unbound"}])),
+                "'AC1'.evidence_source must be a non-empty string",
+            ),
+            "a blank evidence source": (
+                body(contract=contract_json([{"id": "AC1", "description": "Unbound", "evidence_source": " "}])),
+                "'AC1'.evidence_source must be a non-empty string",
             ),
             "a criterion that is not an object": (
                 body(contract='{"criteria": ["AC1"]}'),

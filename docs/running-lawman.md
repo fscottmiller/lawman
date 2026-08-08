@@ -2,7 +2,7 @@
 
 Lawman makes two separate calls:
 
-* **Work Contract → Evidence → Work Contract Result** asks whether one piece of work met its acceptance criteria. The contract comes from a local file or from the GitHub Issue that ordered the work.
+* **Work Contract → Bound Evidence → Work Contract Result** asks whether one piece of work met its acceptance criteria. The contract comes from a local file or from the GitHub Issue that ordered the work.
 * **Intent → Policy Selection → OPA → Decision** asks whether policy allows a transition.
 
 A satisfied work contract does not authorize a transition. Policy still decides what is allowed. Transition execution is not built yet.
@@ -24,13 +24,13 @@ opa version
 
 ## Work contract satisfaction
 
-A work contract names explicit acceptance criteria. Evidence names exactly one criterion, one traceable source, and whether that source passed:
+A work contract names explicit acceptance criteria, and each one names the source that can prove it ([ADR 11](decisions/0011-acceptance-criteria-bind-their-evidence.md)). Evidence names exactly one criterion, one traceable source, and whether that source passed:
 
 ```json
 {
   "criteria": [
-    { "id": "AC1", "description": "Invalid tokens return 401" },
-    { "id": "AC2", "description": "Valid tokens return 200" }
+    { "id": "AC1", "description": "Invalid tokens return 401", "evidence_source": "test_invalid_token" },
+    { "id": "AC2", "description": "Valid tokens return 200", "evidence_source": "test_valid_token" }
   ]
 }
 ```
@@ -43,7 +43,13 @@ A work contract names explicit acceptance criteria. Evidence names exactly one c
 }
 ```
 
-Evidence is a list so duplicate entries can be refused instead of silently overwritten.
+Evidence is a list so duplicate entries can be refused instead of silently overwritten. The evidence schema is unchanged; what changed is which entries a criterion will accept.
+
+### What a binding means
+
+Each criterion requires exactly one evidence source, and no source may prove two criteria. An entry applies only when its `criterion_id` **and** its `source` are the ones the contract named. Matching is exact and case-sensitive.
+
+The identifier is opaque. Lawman does not interpret test names, paths, check names, or prefixes; it does not run the source, fetch it, or check that it exists. Binding says which proof was owed — not that the proof is trustworthy.
 
 Run the complete example:
 
@@ -55,13 +61,44 @@ python -m lawman work \
 
 Each criterion becomes exactly one of:
 
-* `proven` — explicit evidence exists and passed
-* `failed` — explicit evidence exists and failed
-* `unproven` — no evidence exists
+* `proven` — the bound source was presented and passed
+* `failed` — the bound source was presented and failed
+* `unproven` — no evidence named the criterion
 
-The result is satisfied only when every criterion is proven. Missing evidence fails closed as `unproven`. Unknown criteria, duplicate entries, and malformed input are refused with exit `2`; a valid but unsatisfied result exits `1`; a satisfied result exits `0`.
+The result is satisfied only when every criterion is proven. Missing evidence fails closed as `unproven`. A valid but unsatisfied result exits `1`; a satisfied result exits `0`.
 
-Results follow contract order and include the criterion ID, description, status, evidence source, and explanation. Use `evidence-missing-audit.json` to see an explained `unproven` result.
+Results follow contract order, and every criterion appears:
+
+```json
+{
+  "id": "AC3",
+  "description": "Authentication failures emit an audit event",
+  "evidence_source": "test_authentication_audit_event",
+  "status": "unproven",
+  "source": null,
+  "explanation": "Unproven: no evidence from test_authentication_audit_event was provided."
+}
+```
+
+`evidence_source` is what the contract requires; `source` is what was presented, or `null` when nothing was. Use `evidence-missing-audit.json` to see an explained `unproven` result.
+
+### Unsatisfied is not refused
+
+A missing entry is an unsatisfied result; a wrong source is malformed evidence. Silence is something the contract anticipated, so it is reported. A passing claim against a source nobody bound is not an answer to the obligation, so it is refused rather than counted or quietly dropped:
+
+| Situation | Exit |
+| --- | --- |
+| the bound source reports `false` | `1` |
+| no evidence names the criterion | `1` |
+| evidence names a criterion but not the source it bound | `2` |
+| evidence names a criterion the contract does not | `2` |
+| evidence repeats a criterion | `2` |
+| a criterion has no `evidence_source`, or a blank one | `2` |
+| two criteria share one `evidence_source` | `2` |
+
+`evidence-wrong-source.json` is a claim against the wrong source: it exits `2`, prints no result, and says which source AC3 actually requires.
+
+A contract without `evidence_source` is refused, and no default is supplied. Lawman cannot safely guess which source was meant to prove a criterion.
 
 This command needs no OPA. Work contracts are Lawman's own model, and they are not transition policy ([ADR 8](decisions/0008-work-contracts-are-separate-from-transition-policy.md)).
 
@@ -87,8 +124,8 @@ Some prose explaining the work. None of this is read.
 ```lawman-work-contract
 {
   "criteria": [
-    { "id": "AC1", "description": "Invalid tokens return 401" },
-    { "id": "AC2", "description": "Valid tokens return 200" }
+    { "id": "AC1", "description": "Invalid tokens return 401", "evidence_source": "test_invalid_token" },
+    { "id": "AC2", "description": "Valid tokens return 200", "evidence_source": "test_valid_token" }
   ]
 }
 ```
@@ -117,7 +154,7 @@ A GitHub-backed result adds `contract_source` in front of the usual document:
     "url": "https://github.com/fscottmiller/lawman/issues/8",
     "node_id": "I_kwDOexample",
     "updated_at": "2026-08-08T00:00:00Z",
-    "contract_sha256": "sha256:c5d300a28bde0b9bd788f5b5ea90c4f02681416e76f045e7c57fa13954105433"
+    "contract_sha256": "sha256:6a1e09b344ecc7219ade4e2a9e67abce96430b7439d29d2abe21b0a0ff680636"
   },
   "satisfied": false,
   "criteria": []
@@ -125,7 +162,7 @@ A GitHub-backed result adds `contract_source` in front of the usual document:
 ```
 
 * `node_id` says **which issue**, permanently. It survives renaming the repository or the owner; the URL does not.
-* `contract_sha256` says **which contract**. It is a SHA-256 of the normalized semantic contract: criteria in issue order, each reduced to `id` and `description`, sorted keys, compact separators, UTF-8, lowercase hex. Rewording the prose or reindenting the JSON does not move it; changing a criterion does.
+* `contract_sha256` says **which contract**. It is a SHA-256 of the normalized semantic contract: criteria in issue order, each reduced to `id`, `description`, and `evidence_source`, sorted keys, compact separators, UTF-8, lowercase hex. Rewording the prose or reindenting the JSON does not move it; changing a criterion does, and so does **changing only a binding** — the source a criterion requires is part of the obligation ([ADR 11](decisions/0011-acceptance-criteria-bind-their-evidence.md)).
 * `updated_at` is trace information, not identity. Any edit to the issue moves it.
 
 The local `--contract` result is unchanged and carries no `contract_source`.
@@ -140,11 +177,11 @@ Exit `2`, nothing on stdout, one line on stderr:
 | the URL names a pull request, or carries a query or a `#comment` fragment | `2` |
 | the issue has no `lawman-work-contract` block, or more than one | `2` |
 | the block is not valid JSON, or repeats a JSON key | `2` |
-| the contract violates the usual work-contract rules — no criteria, duplicate IDs, blank description | `2` |
+| the contract violates the usual work-contract rules — no criteria, duplicate IDs, blank description, a missing or shared `evidence_source` | `2` |
 | the issue is inaccessible, or GitHub returns an HTTP error | `2` |
 | the network fails, the read times out, or GitHub redirects elsewhere | `2` |
 | GitHub answers with a different issue than the one requested | `2` |
-| evidence names a criterion the issue does not | `2` |
+| evidence names a criterion the issue does not, or a source the issue did not bind | `2` |
 
 A valid contract behaves exactly as a local one: exit `0` when every criterion is proven, exit `1` when one is not.
 
@@ -153,6 +190,8 @@ A valid contract behaves exactly as a local one: exit `0` when every criterion i
 The contract came from the identified issue rather than from caller-controlled local input. That is all "authoritative" means here.
 
 **Reading an issue does not prove the caller chose the right issue**, and a satisfied issue contract still authorizes nothing. This command reaches no policy and runs no OPA; the source identity is there so later policy can check the relationship itself, instead of trusting an unbound `work_satisfied: true`.
+
+Binding narrows what a claim may be made of, not who made it. **Lawman does not retrieve evidence**: the presented document still says what passed, and nothing here proves that the named source ran, exists, or told the truth.
 
 ## Transition policy
 
@@ -301,7 +340,7 @@ Four things on the transition side:
 * **Evidence** — a JSON object, whatever the policy needs. `{"tests_passed": true, "human_approved": true}`
 * **Decision** — `allowed`, the intent, and the policy's ordered reasons.
 
-Work contracts keep their own model — names, explicit evidence, and silence is never proof ([ADR 3](decisions/0003-a-requirement-is-a-name.md), [ADR 4](decisions/0004-silence-is-not-proof.md)). The two do not mix: a work-contract result is not policy input, and policy is not an acceptance criterion.
+Work contracts keep their own model — names, explicit evidence bound to the source that must prove it, and silence is never proof ([ADR 3](decisions/0003-a-requirement-is-a-name.md), [ADR 4](decisions/0004-silence-is-not-proof.md), [ADR 11](decisions/0011-acceptance-criteria-bind-their-evidence.md)). The two do not mix: a work-contract result is not policy input, and policy is not an acceptance criterion.
 
 ## The tests
 
@@ -328,15 +367,16 @@ Working — `tests/test_work.py`:
 
 | Behavior | Test |
 | --- | --- |
-| all criteria proven → satisfied | `AccountsForEveryCriterion.test_all_criteria_proven_satisfies_the_contract` |
-| one failed → unsatisfied | `AccountsForEveryCriterion.test_one_failed_criterion_does_not_satisfy_the_contract` |
-| missing or no evidence → unproven | `AccountsForEveryCriterion.test_one_missing_criterion_is_unproven_and_does_not_satisfy`, `.test_no_evidence_leaves_every_criterion_unproven` |
-| contract order and determinism | `AccountsForEveryCriterion.test_result_order_follows_the_contract_not_the_evidence`, `.test_identical_inputs_produce_identical_results` |
+| every criterion binds one non-empty source | `BindsEveryCriterionToOneSource.test_every_criterion_requires_one_evidence_source` |
+| no source proves two criteria | `BindsEveryCriterionToOneSource.test_contract_requires_unique_evidence_sources` |
+| an entry applies only to the source it was bound to | `AcceptsOnlyTheSourceTheContractBound.test_evidence_must_match_the_bound_source_exactly` |
+| bound evidence → proven or failed | `AcceptsOnlyTheSourceTheContractBound.test_bound_evidence_determines_proven_and_failed` |
+| silence about the bound source → unproven | `AcceptsOnlyTheSourceTheContractBound.test_missing_bound_evidence_is_explicitly_unproven` |
+| every binding accounted for, in contract order | `AcceptsOnlyTheSourceTheContractBound.test_results_account_for_every_binding_in_contract_order` |
 | malformed, duplicate, or unknown input → refuse | `RefusesMalformedOrAmbiguousInput` |
-| direct construction preserves invariants | `HoldsItsInvariantsWhenConstructedDirectly.test_direct_construction_cannot_bypass_domain_invariants` |
-| results are immutable | `HoldsItsInvariantsWhenConstructedDirectly.test_results_are_immutable_after_construction` |
+| direct construction preserves invariants, results are immutable | `HoldsItsInvariantsWhenConstructedDirectly.test_bound_work_domain_is_immutable_and_cannot_bypass_invariants` |
 
-`tests/test_work_cli.py` covers the same capability through `python -m lawman work`, including exit codes and byte-identical output — `test_local_work_contract_command_remains_byte_identical` pins the local result's exact bytes. `tests/test_cli.py`'s `TheWorkCommandIsUntouched` proves it still runs with no OPA on `PATH`.
+`tests/test_work_cli.py` covers the same capability through `python -m lawman work`, including exit codes and byte-identical output. `test_unknown_duplicate_or_misbound_evidence_is_refused` pins the refusals, `test_binding_is_deterministic_and_transition_policy_is_untouched` pins determinism and the untouched transition surface, and `test_local_work_contract_command_remains_byte_identical` pins the local result's exact bytes. `tests/test_cli.py`'s `TheWorkCommandIsUntouched` proves it still runs with no OPA on `PATH`.
 
 Reading an issue — `tests/test_github.py`, against a local stand-in GitHub (`tests/fake_github.py`), never a live issue:
 
@@ -347,8 +387,9 @@ Reading an issue — `tests/test_github.py`, against a local stand-in GitHub (`t
 | only the single tagged block is read | `ReadsTheContractFromTheIssue.test_only_the_single_tagged_contract_block_is_parsed` |
 | missing, duplicated, or malformed blocks → refuse | `RefusesAnythingItCannotReadAsAContract.test_missing_duplicate_or_malformed_contract_blocks_are_refused` |
 | bad URLs, HTTP errors, timeouts, and mismatched responses → refuse | `RefusesAnythingItCannotReadAsAContract.test_invalid_urls_and_github_failures_are_refused` |
-| the existing work model decides it | `ReadsTheContractFromTheIssue.test_issue_contract_uses_existing_work_evaluation_semantics` |
+| local and issue contracts bind and evaluate identically | `ReadsTheContractFromTheIssue.test_local_and_github_contracts_bind_evidence_identically` |
 | source identity is bound to the contract's content | `SaysWhichContractItJudged.test_issue_contract_source_has_content_bound_identity` |
+| changing only a binding changes the hash | `SaysWhichContractItJudged.test_contract_identity_is_bound_to_required_evidence` |
 | satisfied exits `0`, unsatisfied exits `1` | `SaysWhichContractItJudged.test_issue_contract_returns_satisfied_and_unsatisfied_results` |
 | identical responses produce identical bytes | `SaysWhichContractItJudged.test_issue_contract_output_is_byte_identical_across_runs` |
 | no policy is selected, and no transition is authorized | `TheContractSourceIsTheOnlyThingItProves.test_issue_contract_evaluation_does_not_invoke_transition_policy` |
@@ -376,7 +417,7 @@ Selecting — `tests/test_selection.py`:
 
 `tests/test_cli.py` covers exit codes, byte-identical output across runs, and `TheCallerCannotChooseTheRules` — that no `--policy`, `--contract`, `--data`, or `--query` flag exists, and that the policy OPA is handed is the repository's, not one sitting beside the requester's files.
 
-`tests/test_docs.py` checks that this guide, ADR 9, and ADR 10 still describe the interface the code actually has.
+`tests/test_docs.py` checks that this guide, ADR 9, ADR 10, and ADR 11 still describe the interface the code actually has.
 
 ## Why it looks like this
 

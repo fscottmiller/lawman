@@ -2,15 +2,18 @@
   "criteria": [
     {
       "id": "AC1",
-      "description": "Invalid tokens return 401"
+      "description": "Invalid tokens return 401",
+      "evidence_source": "test_invalid_token"
     },
     {
       "id": "AC2",
-      "description": "Valid tokens return 200"
+      "description": "Valid tokens return 200",
+      "evidence_source": "test_valid_token"
     },
     {
       "id": "AC3",
-      "description": "Authentication failures emit an audit event"
+      "description": "Authentication failures emit an audit event",
+      "evidence_source": "test_authentication_audit_event"
     }
   ]
 }

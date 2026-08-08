@@ -91,13 +91,15 @@ The requester chooses what it wants to do. It does not choose the rules it will 
 
 Lawman does not interpret the rules either. The governed repository owns them as Rego in `.lawman/policies/`, and [OPA](https://www.openpolicyagent.org/) evaluates them. Lawman selects the policy, hands OPA the intent and the evidence, validates the decision, and reports it.
 
-**Work Contract → Evidence → Work Contract Result**. It decides whether one piece of work satisfied every acceptance criterion:
+**Work Contract → Bound Evidence → Work Contract Result**. It decides whether one piece of work satisfied every acceptance criterion:
 
 ```bash
 python -m lawman work \
   --contract examples/work-contract/contract.json \
   --evidence examples/work-contract/evidence.json
 ```
+
+Each criterion names the one `evidence_source` that can prove it, so a passing result attached to the right criterion ID is not enough — it has to be the proof the contract asked for.
 
 The contract can also come from the GitHub Issue that ordered the work, so the criteria are not written by whoever claims to have met them:
 
