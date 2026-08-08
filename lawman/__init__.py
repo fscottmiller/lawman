@@ -1,7 +1,8 @@
 """Lawman: prove work, decide transitions, and say why."""
 
-from .decision import Contract, Decision, Evidence, Intent, LawmanError, decide
-from .selection import ContractRegistry, select_contract
+from .decision import Decision, Evidence, Intent, LawmanError
+from .opa import evaluate_policy
+from .selection import PolicyRegistry, select_policy
 from .work import (
     AcceptanceCriterion,
     CriterionEvidence,
@@ -14,18 +15,17 @@ from .work import (
 
 __all__ = [
     "AcceptanceCriterion",
-    "Contract",
-    "ContractRegistry",
     "CriterionEvidence",
     "CriterionResult",
     "Decision",
     "Evidence",
     "Intent",
     "LawmanError",
+    "PolicyRegistry",
     "WorkContract",
     "WorkContractResult",
     "WorkEvidence",
-    "decide",
+    "evaluate_policy",
     "evaluate_work_contract",
-    "select_contract",
+    "select_policy",
 ]

@@ -1,6 +1,6 @@
 # 3. A requirement is a name
 
-Status: Accepted (2026-08-07)
+Status: Accepted (2026-08-07). Superseded for transition policy by [ADR 9](0009-delegate-transition-policy-to-opa.md) (2026-08-08) — transitions are decided by Rego, evaluated by OPA. This still governs work contracts, where a requirement is still a name.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 4. Silence is not proof
 
-Status: Accepted (2026-08-07)
+Status: Accepted (2026-08-07). Superseded for transition policy by [ADR 9](0009-delegate-transition-policy-to-opa.md) (2026-08-08) — transition evidence is passed to policy uninterpreted, and a Rego policy decides what absence means. This still governs work contracts, and Lawman still fails closed everywhere it cannot reach a decision.
 
 ## Context
 

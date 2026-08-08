@@ -1,6 +1,6 @@
 # 6. The repository picks the contract
 
-Status: Accepted (2026-08-07)
+Status: Accepted (2026-08-07). Amended by [ADR 9](0009-delegate-transition-policy-to-opa.md) (2026-08-08) — the registry is `.lawman/policies.json` and it names Rego policies. The boundary below is unchanged: the requester still cannot name the rules.
 
 Supersedes the `--contract` half of [ADR 5](0005-json-files-and-a-cli.md).
 

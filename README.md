@@ -79,7 +79,7 @@ The workers can change. The rules can change. The enforcement persists.
 
 Lawman makes two separate calls.
 
-**Intent → Contract Selection → Contract → Evidence → Decision**. It decides whether policy allows a transition:
+**Intent → Policy Selection → OPA → Decision**. It decides whether policy allows a transition:
 
 ```bash
 python -m lawman \
@@ -87,7 +87,9 @@ python -m lawman \
   --evidence examples/deploy-to-production/evidence.json
 ```
 
-The requester chooses what it wants to do. It does not choose the rules it will be judged by — there is no `--contract`.
+The requester chooses what it wants to do. It does not choose the rules it will be judged by — there is no `--contract`, and no `--policy`.
+
+Lawman does not interpret the rules either. The governed repository owns them as Rego in `.lawman/policies/`, and [OPA](https://www.openpolicyagent.org/) evaluates them. Lawman selects the policy, hands OPA the intent and the evidence, validates the decision, and reports it.
 
 **Work Contract → Evidence → Work Contract Result**. It decides whether one piece of work satisfied every acceptance criterion:
 

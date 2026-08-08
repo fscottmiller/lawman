@@ -1,16 +1,16 @@
-"""Selection decides which rules apply. The requester does not."""
+"""Selection decides which policy applies. The requester does not."""
 
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from lawman import Contract, ContractRegistry, Intent, LawmanError, select_contract
+from lawman import Intent, LawmanError, PolicyRegistry, select_policy
 
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = Intent(action="deploy", target="production")
-PRODUCTION_CONTRACT = Contract(requires=("tests_passed", "human_approved"))
-DEPLOY_PRODUCTION = {"deploy": {"production": "contracts/deploy-production.json"}}
+DEPLOY_PRODUCTION = {"deploy": {"production": "policies/deploy-production.rego"}}
+ALLOW_ANYTHING = 'package lawman\n\ndecision := {"allowed": true, "reasons": ["Anything goes."]}\n'
 
 
 def write(path, document):
@@ -19,215 +19,166 @@ def write(path, document):
     return path
 
 
-def policy(directory, registry, contracts=()):
-    """Build a policy directory: a registry, plus contracts it can point at."""
-    policy_directory = Path(directory) / ".lawman"
-    write(policy_directory / "contracts.json", registry)
-    for relative, contract in dict(contracts).items():
-        write(policy_directory / relative, contract)
-    return policy_directory
+def policy_directory(directory, registry, policies=()):
+    """Build a policy directory: a registry, plus policies it can point at."""
+    configured = Path(directory) / ".lawman"
+    write(configured / "policies.json", registry)
+    for relative, policy in dict(policies).items():
+        write(configured / relative, policy)
+    return configured
 
 
-class SelectsTheContractTheRepositoryConfigured(unittest.TestCase):
-    def test_deploy_to_production_resolves_to_the_checked_in_contract(self):
-        contract = select_contract(DEPLOY, ROOT / ".lawman")
+class SelectsThePolicyTheRepositoryConfigured(unittest.TestCase):
+    def test_repository_selects_policy_for_the_intent(self):
+        """AC1. The registry names the policy, and it is the only thing that does."""
+        selected = select_policy(DEPLOY, ROOT / ".lawman")
 
-        self.assertEqual(contract, PRODUCTION_CONTRACT)
+        self.assertEqual(selected, (ROOT / ".lawman" / "policies" / "deploy-production.rego").resolve())
+        self.assertTrue(selected.is_file())
 
-    def test_the_same_intent_always_selects_the_same_contract(self):
-        selections = [select_contract(DEPLOY, ROOT / ".lawman") for _ in range(5)]
+        # The same intent always resolves to the same file.
+        self.assertEqual({select_policy(DEPLOY, ROOT / ".lawman") for _ in range(5)}, {selected})
 
-        self.assertEqual(len(set(selections)), 1)
-
-    def test_a_contract_is_read_from_the_policy_directory_not_from_beside_the_intent(self):
+        # A repository carrying only the retired contract registry is refused:
+        # .lawman/contracts.json no longer selects transition policy.
         with tempfile.TemporaryDirectory() as directory:
-            write(Path(directory) / "contract.json", {"requires": ["tests_passed"]})
-            selected = select_contract(
+            retired = Path(directory) / ".lawman"
+            write(retired / "contracts.json", DEPLOY_PRODUCTION)
+            write(retired / "contracts" / "deploy-production.json", {"requires": ["tests_passed"]})
+
+            with self.assertRaises(LawmanError) as refusal:
+                select_policy(DEPLOY, retired)
+
+        self.assertIn("cannot read policy registry", str(refusal.exception))
+
+        # And where both exist, only policies.json is read.
+        with tempfile.TemporaryDirectory() as directory:
+            configured = policy_directory(
+                directory, DEPLOY_PRODUCTION, {"policies/deploy-production.rego": ALLOW_ANYTHING}
+            )
+            write(configured / "contracts.json", {"deploy": {"production": "contracts/other.json"}})
+
+            self.assertEqual(select_policy(DEPLOY, configured).name, "deploy-production.rego")
+
+    def test_a_policy_is_read_from_the_policy_directory_not_from_beside_the_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            write(Path(directory) / "policy.rego", ALLOW_ANYTHING)
+            selected = select_policy(
                 DEPLOY,
-                policy(
-                    directory,
-                    DEPLOY_PRODUCTION,
-                    {"contracts/deploy-production.json": {"requires": ["tests_passed", "human_approved"]}},
-                ),
+                policy_directory(directory, DEPLOY_PRODUCTION, {"policies/deploy-production.rego": ALLOW_ANYTHING}),
             )
 
-        self.assertEqual(selected, PRODUCTION_CONTRACT)
+        self.assertEqual(selected.parent.name, "policies")
 
     def test_one_action_can_govern_several_targets_independently(self):
-        registry = ContractRegistry(
-            {"deploy": {"production": "contracts/production.json", "staging": "contracts/staging.json"}}
+        registry = PolicyRegistry(
+            {"deploy": {"production": "policies/production.rego", "staging": "policies/staging.rego"}}
         )
 
-        self.assertEqual(registry.path_for(DEPLOY), "contracts/production.json")
-        self.assertEqual(
-            registry.path_for(Intent(action="deploy", target="staging")), "contracts/staging.json"
-        )
+        self.assertEqual(registry.path_for(DEPLOY), "policies/production.rego")
+        self.assertEqual(registry.path_for(Intent(action="deploy", target="staging")), "policies/staging.rego")
 
 
 class FailsClosedWhenItCannotFindTheRules(unittest.TestCase):
     """Not knowing the rules is not the same as applying them."""
 
-    def test_an_intent_with_no_configured_contract_is_refused(self):
+    def test_invalid_or_escaping_policy_selection_is_refused(self):
+        """AC8. Every way selection can fail refuses, and none of them denies."""
         with tempfile.TemporaryDirectory() as directory:
-            configured = policy(
-                directory,
-                DEPLOY_PRODUCTION,
-                {"contracts/deploy-production.json": {"requires": ["tests_passed"]}},
+            root = Path(directory)
+            write(root / "escaped.rego", ALLOW_ANYTHING)
+            configured = policy_directory(
+                root / "configured", DEPLOY_PRODUCTION, {"policies/deploy-production.rego": ALLOW_ANYTHING}
             )
+            symlinked = policy_directory(root / "symlinked", DEPLOY_PRODUCTION)
+            (symlinked / "policies").mkdir(parents=True, exist_ok=True)
+            (symlinked / "policies" / "deploy-production.rego").symlink_to(root / "escaped.rego")
 
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(Intent(action="deploy", target="staging"), configured)
+            refusals = {
+                "missing registry": (DEPLOY, root / "absent" / ".lawman", "cannot read policy registry"),
+                "malformed registry": (DEPLOY, policy_directory(root / "a", "{ not json"), "not valid JSON"),
+                "registry that is not an object": (
+                    DEPLOY,
+                    policy_directory(root / "b", ["deploy"]),
+                    "policy registry must be an object",
+                ),
+                "registry naming no policies": (DEPLOY, policy_directory(root / "c", {}), "names no policies"),
+                "registry not nested by target": (
+                    DEPLOY,
+                    policy_directory(root / "d", {"deploy": "policies/deploy-production.rego"}),
+                    "policy registry action 'deploy' must be an object",
+                ),
+                "unconfigured target": (
+                    Intent(action="deploy", target="staging"),
+                    configured,
+                    "no policy is configured",
+                ),
+                "unconfigured action": (
+                    Intent(action="rollback", target="production"),
+                    configured,
+                    "no policy is configured",
+                ),
+                "missing policy file": (DEPLOY, policy_directory(root / "e", DEPLOY_PRODUCTION), "cannot read policy"),
+                "absolute policy path": (
+                    DEPLOY,
+                    policy_directory(root / "f", {"deploy": {"production": str(root / "escaped.rego")}}),
+                    "outside the policy directory",
+                ),
+                "parent directory escape": (
+                    DEPLOY,
+                    policy_directory(root / "g", {"deploy": {"production": "../../escaped.rego"}}),
+                    "outside the policy directory",
+                ),
+                "symlink escape": (DEPLOY, symlinked, "outside the policy directory"),
+            }
 
-        self.assertIn("no contract is configured for deploy -> staging", str(refusal.exception))
-
-    def test_an_unconfigured_action_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            configured = policy(
-                directory,
-                DEPLOY_PRODUCTION,
-                {"contracts/deploy-production.json": {"requires": ["tests_passed"]}},
-            )
-
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(Intent(action="rollback", target="production"), configured)
-
-        self.assertIn("no contract is configured for rollback -> production", str(refusal.exception))
-
-    def test_a_missing_registry_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, Path(directory) / ".lawman")
-
-        self.assertIn("cannot read contract registry", str(refusal.exception))
-
-    def test_a_registry_that_is_not_valid_json_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, policy(directory, "{ not json"))
-
-        self.assertIn("not valid JSON", str(refusal.exception))
-
-    def test_a_registry_that_is_not_nested_names_is_refused(self):
-        for registry in (
-            [],
-            "deploy",
-            {},
-            {"deploy": "contracts/deploy-production.json"},
-            {"deploy": {}},
-            {"deploy": {"production": 7}},
-        ):
-            with self.subTest(registry=registry), tempfile.TemporaryDirectory() as directory:
-                with self.assertRaises(LawmanError):
-                    select_contract(DEPLOY, policy(directory, registry))
-
-    def test_a_configured_contract_that_cannot_be_read_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            configured = policy(directory, DEPLOY_PRODUCTION)
-
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, configured)
-
-        self.assertIn("cannot read contract for deploy -> production", str(refusal.exception))
-
-    def test_a_configured_contract_that_is_not_valid_json_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            configured = policy(
-                directory, DEPLOY_PRODUCTION, {"contracts/deploy-production.json": "{ not json"}
-            )
-
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, configured)
-
-        self.assertIn("not valid JSON", str(refusal.exception))
-
-    def test_a_configured_contract_that_requires_nothing_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            configured = policy(
-                directory, DEPLOY_PRODUCTION, {"contracts/deploy-production.json": {"requires": []}}
-            )
-
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, configured)
-
-        self.assertIn("at least one requirement", str(refusal.exception))
-
-
-class RefusesContractsTheRepositoryDoesNotOwn(unittest.TestCase):
-    """A registry can only offer contracts inside its own policy directory."""
-
-    def test_a_path_climbing_out_of_the_policy_directory_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            write(Path(directory) / "weak.json", {"requires": ["tests_passed"]})
-            configured = policy(directory, {"deploy": {"production": "../weak.json"}})
-
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, configured)
-
-        self.assertIn("outside the policy directory", str(refusal.exception))
-
-    def test_an_absolute_path_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            weak = write(Path(directory) / "weak.json", {"requires": ["tests_passed"]})
-            configured = policy(directory, {"deploy": {"production": str(weak)}})
-
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, configured)
-
-        self.assertIn("outside the policy directory", str(refusal.exception))
-
-    def test_a_symlink_out_of_the_policy_directory_is_refused(self):
-        with tempfile.TemporaryDirectory() as directory:
-            weak = write(Path(directory) / "weak.json", {"requires": ["tests_passed"]})
-            configured = policy(directory, DEPLOY_PRODUCTION)
-            (configured / "contracts").mkdir(parents=True, exist_ok=True)
-            (configured / "contracts" / "deploy-production.json").symlink_to(weak)
-
-            with self.assertRaises(LawmanError) as refusal:
-                select_contract(DEPLOY, configured)
-
-        self.assertIn("outside the policy directory", str(refusal.exception))
+            for situation, (intent, configured_directory, expected) in refusals.items():
+                with self.subTest(situation=situation):
+                    with self.assertRaises(LawmanError) as refusal:
+                        select_policy(intent, configured_directory)
+                    self.assertIn(expected, str(refusal.exception))
 
 
 class HoldsItsInvariantsWhenConstructedDirectly(unittest.TestCase):
     """Parsing is one way in, not the only way. The invariants belong to the type."""
 
-    def test_a_registry_that_names_no_contracts_cannot_exist(self):
-        for contracts in ({}, []):
-            with self.subTest(contracts=contracts):
+    def test_a_registry_that_names_no_policies_cannot_exist(self):
+        for policies in ({}, []):
+            with self.subTest(policies=policies):
                 with self.assertRaises(LawmanError):
-                    ContractRegistry(contracts=contracts)
+                    PolicyRegistry(policies=policies)
 
     def test_registry_must_be_a_map(self):
-        for contracts in (None, "deploy", ["deploy"]):
-            with self.subTest(contracts=contracts):
+        for policies in (None, "deploy", ["deploy"]):
+            with self.subTest(policies=policies):
                 with self.assertRaises(LawmanError):
-                    ContractRegistry(contracts=contracts)
+                    PolicyRegistry(policies=policies)
 
     def test_every_action_names_a_map_of_targets(self):
-        for targets in ("contracts/deploy-production.json", None, 7, ["production"], {}):
+        for targets in ("policies/deploy-production.rego", None, 7, ["production"], {}):
             with self.subTest(targets=targets):
                 with self.assertRaises(LawmanError):
-                    ContractRegistry(contracts={"deploy": targets})
+                    PolicyRegistry(policies={"deploy": targets})
 
     def test_actions_and_targets_are_names(self):
-        for contracts in (
-            {"": {"production": "contracts/deploy-production.json"}},
-            {"   ": {"production": "contracts/deploy-production.json"}},
-            {"deploy": {"": "contracts/deploy-production.json"}},
-            {"deploy": {"   ": "contracts/deploy-production.json"}},
+        for policies in (
+            {"": {"production": "policies/deploy-production.rego"}},
+            {"   ": {"production": "policies/deploy-production.rego"}},
+            {"deploy": {"": "policies/deploy-production.rego"}},
+            {"deploy": {"   ": "policies/deploy-production.rego"}},
         ):
-            with self.subTest(contracts=contracts):
+            with self.subTest(policies=policies):
                 with self.assertRaises(LawmanError):
-                    ContractRegistry(contracts=contracts)
+                    PolicyRegistry(policies=policies)
 
-    def test_every_entry_names_a_contract_path(self):
-        for path in ("", "   ", None, 7, ["contracts/deploy-production.json"]):
+    def test_every_entry_names_a_policy_path(self):
+        for path in ("", "   ", None, 7, ["policies/deploy-production.rego"]):
             with self.subTest(path=path):
                 with self.assertRaises(LawmanError):
-                    ContractRegistry(contracts={"deploy": {"production": path}})
+                    PolicyRegistry(policies={"deploy": {"production": path}})
 
     def test_an_unconfigured_intent_has_no_path(self):
-        registry = ContractRegistry(DEPLOY_PRODUCTION)
+        registry = PolicyRegistry(DEPLOY_PRODUCTION)
 
         for intent in (Intent(action="deploy", target="staging"), Intent(action="rollback", target="production")):
             with self.subTest(intent=str(intent)):
@@ -235,24 +186,24 @@ class HoldsItsInvariantsWhenConstructedDirectly(unittest.TestCase):
                     registry.path_for(intent)
 
     def test_the_rules_cannot_be_rewritten_after_they_are_read(self):
-        registry = ContractRegistry(DEPLOY_PRODUCTION)
+        registry = PolicyRegistry(DEPLOY_PRODUCTION)
 
         with self.assertRaises(TypeError):
-            registry.contracts["rollback"] = {"production": "contracts/weak.json"}
+            registry.policies["rollback"] = {"production": "policies/weak.rego"}
         with self.assertRaises(TypeError):
-            registry.contracts["deploy"]["production"] = "contracts/weak.json"
+            registry.policies["deploy"]["production"] = "policies/weak.rego"
         with self.assertRaises(AttributeError):
-            registry.contracts = {"deploy": {"production": "contracts/weak.json"}}
+            registry.policies = {"deploy": {"production": "policies/weak.rego"}}
 
     def test_the_registry_does_not_alias_the_caller_s_map(self):
-        targets = {"production": "contracts/deploy-production.json"}
-        contracts = {"deploy": targets}
-        registry = ContractRegistry(contracts)
+        targets = {"production": "policies/deploy-production.rego"}
+        policies = {"deploy": targets}
+        registry = PolicyRegistry(policies)
 
-        targets["production"] = "contracts/weak.json"
-        contracts["deploy"] = {"production": "contracts/weak.json"}
+        targets["production"] = "policies/weak.rego"
+        policies["deploy"] = {"production": "policies/weak.rego"}
 
-        self.assertEqual(registry.path_for(DEPLOY), "contracts/deploy-production.json")
+        self.assertEqual(registry.path_for(DEPLOY), "policies/deploy-production.rego")
 
 
 if __name__ == "__main__":

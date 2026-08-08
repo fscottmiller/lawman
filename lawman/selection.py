@@ -1,20 +1,23 @@
-"""Intent -> Contract Selection -> Contract.
+"""Intent -> Policy Selection -> Policy.
 
 The requester chooses what it wants to do. The governed repository chooses the
 rules it will be judged by. Nothing the requester supplies at runtime names the
-contract (ADR 6).
+policy (ADR 6).
 
 Selection reads a registry checked into the repository being governed:
-`.lawman/contracts.json`, nested the way an intent is shaped — action, then
-target — so it says which contract governs `deploy -> production` without
-giving that pair a name of its own. Contract paths are relative to the policy
-directory that holds the registry, and one that resolves outside it is refused
-— the repository can only offer contracts it owns.
+`.lawman/policies.json`, nested the way an intent is shaped — action, then
+target — so it says which policy governs `deploy -> production` without giving
+that pair a name of its own. Policy paths are relative to the policy directory
+that holds the registry, and one that resolves outside it is refused — the
+repository can only offer policies it owns.
 
-Selection fails closed, and never as a denial. An unknown intent, an
-unreadable registry, or an unreadable contract means Lawman could not find the
-rules, not that it applied them. Both refuse the transition; only one of them
-is a verdict.
+Selection resolves a file and stops. The file is Rego, and OPA is what reads
+Rego (ADR 9). Nothing here parses a policy, so nothing here can quietly grow
+into a second opinion about what one means.
+
+Selection fails closed, and never as a denial. An unknown intent, an unreadable
+registry, or a missing policy means Lawman could not find the rules, not that
+it applied them. Both refuse the transition; only one of them is a verdict.
 """
 
 from __future__ import annotations
@@ -26,61 +29,61 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from .decision import Contract, Intent, LawmanError, _object, _require_name
+from .decision import Intent, LawmanError, _object, _require_name
 
 POLICY_DIRECTORY = ".lawman"
 """Where a governed repository keeps its rules, relative to its root."""
 
-REGISTRY_FILE = "contracts.json"
+REGISTRY_FILE = "policies.json"
 """The registry, relative to the policy directory."""
 
 
 @dataclass(frozen=True)
-class ContractRegistry:
-    """A governed repository's map from intent to authoritative contract.
+class PolicyRegistry:
+    """A governed repository's map from intent to authoritative policy.
 
     Nested by action, then target, mirroring the intent it selects on. Values
-    are contract paths relative to the policy directory:
+    are policy paths relative to the policy directory:
 
-        {"deploy": {"production": "contracts/deploy-production.json"}}
+        {"deploy": {"production": "policies/deploy-production.rego"}}
 
     Both levels are copied and made read-only on construction, for the same
     reason evidence is: rules that could change after they were read would make
     decisions unrepeatable.
     """
 
-    contracts: Mapping[str, Mapping[str, str]]
+    policies: Mapping[str, Mapping[str, str]]
 
     def __post_init__(self) -> None:
-        actions = _object(self.contracts, "contract registry")
+        actions = _object(self.policies, "policy registry")
         if not actions:
-            raise LawmanError("contract registry names no contracts")
+            raise LawmanError("policy registry names no policies")
         by_action: dict[str, Mapping[str, str]] = {}
         for action, targets in actions.items():
-            _require_name(action, "contract registry action")
-            targets = _object(targets, f"contract registry action {action!r}")
+            _require_name(action, "policy registry action")
+            targets = _object(targets, f"policy registry action {action!r}")
             if not targets:
-                raise LawmanError(f"contract registry action {action!r} names no targets")
+                raise LawmanError(f"policy registry action {action!r} names no targets")
             for target, path in targets.items():
-                _require_name(target, f"contract registry target under {action!r}")
-                _require_name(path, f"contract registry entry {action!r} -> {target!r}")
+                _require_name(target, f"policy registry target under {action!r}")
+                _require_name(path, f"policy registry entry {action!r} -> {target!r}")
             by_action[action] = MappingProxyType(dict(targets))
-        object.__setattr__(self, "contracts", MappingProxyType(by_action))
+        object.__setattr__(self, "policies", MappingProxyType(by_action))
 
     @classmethod
-    def from_dict(cls, data: Any) -> ContractRegistry:
+    def from_dict(cls, data: Any) -> PolicyRegistry:
         """A registry document is the map itself."""
-        return cls(contracts=data)
+        return cls(policies=data)
 
     def path_for(self, intent: Intent) -> str:
-        targets = self.contracts.get(intent.action, {})
+        targets = self.policies.get(intent.action, {})
         if intent.target not in targets:
-            raise LawmanError(f"no contract is configured for {intent}")
+            raise LawmanError(f"no policy is configured for {intent}")
         return targets[intent.target]
 
 
-def select_contract(intent: Intent, policy: Path | str = POLICY_DIRECTORY) -> Contract:
-    """Resolve the contract an intent will be judged by.
+def select_policy(intent: Intent, policy: Path | str = POLICY_DIRECTORY) -> Path:
+    """Resolve the policy file an intent will be judged by.
 
     `policy` is the governed repository's policy directory, defaulting to
     `.lawman` in the current working directory — so running Lawman from a
@@ -88,21 +91,23 @@ def select_contract(intent: Intent, policy: Path | str = POLICY_DIRECTORY) -> Co
     and it cannot name a file.
     """
     policy = Path(policy)
-    registry = ContractRegistry.from_dict(_read_json(policy / REGISTRY_FILE, "contract registry"))
-    contract = _inside(policy, registry.path_for(intent))
-    return Contract.from_dict(_read_json(contract, f"contract for {intent}"))
+    registry = PolicyRegistry.from_dict(_read_json(policy / REGISTRY_FILE, "policy registry"))
+    selected = _inside(policy, registry.path_for(intent))
+    if not selected.is_file():
+        raise LawmanError(f"cannot read policy for {intent} at {selected}: no such file")
+    return selected
 
 
 def _inside(policy: Path, relative: str) -> Path:
-    """Contracts live inside the policy directory. Anything else is not ours.
+    """Policies live inside the policy directory. Anything else is not ours.
 
     Resolving first means this refuses an absolute path, a `..` climb, and a
     symlink pointing out of the directory, without reasoning about each.
     """
-    contract = (policy / relative).resolve()
-    if not contract.is_relative_to(policy.resolve()):
-        raise LawmanError(f"contract path {relative!r} is outside the policy directory {policy}")
-    return contract
+    selected = (policy / relative).resolve()
+    if not selected.is_relative_to(policy.resolve()):
+        raise LawmanError(f"policy path {relative!r} is outside the policy directory {policy}")
+    return selected
 
 
 def _read_json(path: Path | str, label: str) -> Any:
