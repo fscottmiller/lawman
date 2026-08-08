@@ -33,14 +33,52 @@ class CarriesEvidenceWithoutReadingIt(unittest.TestCase):
                     Evidence.from_dict(document)
 
     def test_evidence_cannot_change_after_it_is_presented(self):
-        facts = {"tests_passed": False}
+        release = {"tag": "v2.1.0", "artifacts": [{"name": "app.tar.gz"}]}
+        facts = {"tests_passed": False, "reviewers": ["ada"], "release": release}
         evidence = Evidence.from_dict(facts)
 
+        # Nothing the caller still holds reaches into presented evidence.
         facts["tests_passed"] = True
+        facts["reviewers"].append("grace")
+        release["tag"] = "v9.9.9"
+        release["artifacts"][0]["name"] = "backdoor.tar.gz"
 
         self.assertIs(evidence.facts["tests_passed"], False)
+        self.assertEqual(evidence.facts["reviewers"], ("ada",))
+        self.assertEqual(evidence.facts["release"]["tag"], "v2.1.0")
+        self.assertEqual(evidence.facts["release"]["artifacts"][0]["name"], "app.tar.gz")
+        self.assertEqual(evidence.to_dict()["release"]["artifacts"], [{"name": "app.tar.gz"}])
+
+        # And the snapshot itself cannot be written to, at any depth.
         with self.assertRaises(TypeError):
             evidence.facts["tests_passed"] = True
+        with self.assertRaises(TypeError):
+            evidence.facts["release"]["tag"] = "v9.9.9"
+        with self.assertRaises(TypeError):
+            evidence.facts["release"]["artifacts"][0]["name"] = "backdoor.tar.gz"
+        with self.assertRaises(AttributeError):
+            evidence.facts["reviewers"].append("grace")
+
+        # A plain copy handed onward is a copy, not a way back in.
+        handed_on = evidence.to_dict()
+        handed_on["release"]["tag"] = "v9.9.9"
+
+        self.assertEqual(evidence.facts["release"]["tag"], "v2.1.0")
+
+    def test_values_json_cannot_carry_are_refused(self):
+        """A serializer's TypeError is a traceback. Lawman refuses instead."""
+        for value in (object(), b"bytes", {"nested"}, 1j, float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(LawmanError):
+                    Evidence(facts={"fact": value})
+                with self.assertRaises(LawmanError):
+                    Evidence(facts={"release": {"artifacts": [value]}})
+
+    def test_every_key_in_the_tree_is_a_name(self):
+        for facts in ({"": True}, {"   ": True}, {"release": {"": "v1"}}, {"release": {7: "v1"}}):
+            with self.subTest(facts=facts):
+                with self.assertRaises(LawmanError):
+                    Evidence.from_dict(facts)
 
 
 class ReadsOnlyAWellFormedDecision(unittest.TestCase):

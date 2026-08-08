@@ -22,19 +22,26 @@ import json
 import os
 import signal
 import sys
+import time
 
 received = sys.stdin.read()
 record = {record!r}
 if record is not None:
     with open(record, "w", encoding="utf-8") as handle:
         json.dump({{"argv": sys.argv[1:], "input": received}}, handle)
+if {wedged_for!r}:
+    time.sleep({wedged_for!r})
 if {interrupted!r}:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     os.kill(os.getpid(), signal.SIGINT)
-sys.stdout.write({stdout!r})
-sys.stderr.write({stderr!r})
+sys.stdout.buffer.write({stdout!r})
+sys.stderr.buffer.write({stderr!r})
 sys.exit({exit_code!r})
 '''
+
+
+def _raw(output):
+    return output if isinstance(output, bytes) else output.encode("utf-8")
 
 
 def envelope(value):
@@ -42,8 +49,12 @@ def envelope(value):
     return {"result": [{"expressions": [{"value": value, "text": "data.lawman.decision"}]}]}
 
 
-def install(directory, *, stdout="", stderr="", exit_code=0, record=None, interrupted=False):
-    """Write an executable `opa` into `directory`, and return it as a PATH."""
+def install(directory, *, stdout="", stderr="", exit_code=0, record=None, interrupted=False, wedged_for=0):
+    """Write an executable `opa` into `directory`, and return it as a PATH.
+
+    `stdout` and `stderr` may be `bytes`, so a test can hand Lawman output that
+    is not text at all.
+    """
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     script = directory / "opa"
@@ -51,10 +62,11 @@ def install(directory, *, stdout="", stderr="", exit_code=0, record=None, interr
         _SCRIPT.format(
             interpreter=sys.executable,
             record=None if record is None else str(record),
-            stdout=stdout,
-            stderr=stderr,
+            stdout=_raw(stdout),
+            stderr=_raw(stderr),
             exit_code=exit_code,
             interrupted=interrupted,
+            wedged_for=wedged_for,
         ),
         encoding="utf-8",
     )

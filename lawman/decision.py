@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from types import MappingProxyType
 from typing import Any
 
@@ -63,26 +64,30 @@ class Intent:
 class Evidence:
     """Facts presented to Lawman, for the policy to read.
 
-    A JSON object, and that is the whole specification. Lawman checks that it
-    is an object with named keys so it can be handed to OPA as one document; it
-    does not check a value's type, and it does not know which names matter.
+    A JSON object, and that is the whole specification. Lawman checks that the
+    tree is JSON — nothing more. It does not know which names matter, what a
+    value should mean, or what an absent one implies.
 
-    The mapping is copied and made read-only on construction. Evidence that
-    could change after it was presented would make decisions unrepeatable.
+    The whole tree is snapshotted and made read-only on construction, not just
+    the outer mapping. Nested objects and lists are exactly where evidence
+    would otherwise stay writable, and evidence that can change after it was
+    presented makes a decision unrepeatable — which is the property the copy
+    exists to buy.
     """
 
     facts: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        facts = _object(self.facts, "evidence")
-        for name in facts:
-            _require_name(name, "evidence key")
-        object.__setattr__(self, "facts", MappingProxyType(dict(facts)))
+        object.__setattr__(self, "facts", _snapshot(_object(self.facts, "evidence"), "evidence"))
 
     @classmethod
     def from_dict(cls, data: Any) -> Evidence:
         """An evidence document is the fact map itself."""
         return cls(facts=data)
+
+    def to_dict(self) -> dict[str, Any]:
+        """A plain, serializable copy, for handing to a policy engine."""
+        return {name: _plain(value) for name, value in self.facts.items()}
 
 
 @dataclass(frozen=True)
@@ -137,6 +142,40 @@ class Decision:
             "intent": self.intent.to_dict(),
             "reasons": list(self.reasons),
         }
+
+
+def _snapshot(value: Any, label: str) -> Any:
+    """Copy a JSON value, deeply and read-only, refusing what JSON cannot carry.
+
+    Nothing here reads a field. It walks the tree to prove two things: that
+    every value is one JSON can round-trip, and that no reference the caller
+    still holds can reach into it afterwards. Objects become read-only
+    mappings, lists become tuples, and anything else is refused here rather
+    than raising a bare `TypeError` out of a serializer later — an unhandled
+    error is a traceback, and a traceback is not a refusal.
+    """
+    if isinstance(value, Mapping):
+        snapshot: dict[str, Any] = {}
+        for name, item in value.items():
+            _require_name(name, f"{label} key")
+            snapshot[name] = _snapshot(item, f"{label}.{name}")
+        return MappingProxyType(snapshot)
+    if isinstance(value, (list, tuple)):
+        return tuple(_snapshot(item, f"{label}[]") for item in value)
+    if isinstance(value, float) and not isfinite(value):
+        raise LawmanError(f"{label} must be a JSON value; {value} is not one")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise LawmanError(f"{label} must be a JSON value, not {type(value).__name__}")
+
+
+def _plain(value: Any) -> Any:
+    """Undo `_snapshot`'s freezing, so the tree can be serialized."""
+    if isinstance(value, Mapping):
+        return {name: _plain(item) for name, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain(item) for item in value]
+    return value
 
 
 def _object(data: Any, label: str) -> Mapping[str, Any]:

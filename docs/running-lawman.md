@@ -144,7 +144,7 @@ Every selected policy exposes it, and the query is not configurable. OPA receive
 }
 ```
 
-The intent is validated. The evidence is passed through whole — Lawman does not know which keys matter, what type a value should be, or what an absent key means. That is the policy's job:
+The intent is validated. The evidence is passed through whole — Lawman does not know which keys matter, what type a value should be, or what an absent key means. It checks only that the whole tree is JSON, and snapshots it, so evidence cannot change between being presented and being judged. That is the policy's job:
 
 ```rego
 package lawman
@@ -197,6 +197,7 @@ Because `data.lawman.decision` is a fixed document, evolving policy means evolvi
 | the configured policy file is missing, or escapes `.lawman/` | `2` |
 | `opa` is not installed, or exits non-zero | `2` |
 | OPA output is unreadable, or evaluation is interrupted | `2` |
+| OPA does not answer within the fixed 30-second bound | `2` |
 | `data.lawman.decision` is undefined, empty, or not exactly one decision | `2` |
 | the decision is missing `allowed`, missing `reasons`, or has unknown fields | `2` |
 

@@ -104,13 +104,22 @@ class EvaluatesThroughAnExternalOpa(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             record = Path(directory) / "received.json"
+            presented = json.loads(json.dumps(facts))
+            evidence = Evidence.from_dict(facts)
+
+            # What was presented is what OPA sees, however the caller's own
+            # copy moves in the meantime.
+            facts["tests_passed"] = False
+            facts["release"]["tag"] = "v9.9.9"
+            facts["reviewers"].append("mallory")
+
             with on_path(fake_opa.deciding(directory, ALLOWED, record=record)):
-                evaluate_policy(DEPLOY, POLICY, Evidence.from_dict(facts))
+                evaluate_policy(DEPLOY, POLICY, evidence)
             received = json.loads(record.read_text(encoding="utf-8"))
 
         self.assertEqual(
             json.loads(received["input"]),
-            {"intent": {"action": "deploy", "target": "production"}, "evidence": facts},
+            {"intent": {"action": "deploy", "target": "production"}, "evidence": presented},
         )
 
         # The policy and the query are the only things Lawman names, and the
@@ -196,6 +205,12 @@ class RefusesAnythingThatIsNotOneWellFormedDecision(unittest.TestCase):
                 False,
             ),
             "unreadable output": ({"stdout": "not json at all"}, "is not valid JSON", False),
+            "output that is not text": ({"stdout": b"\xff\xfe{}"}, "is not readable UTF-8", False),
+            "failure explained in bytes that are not text": (
+                {"exit_code": 1, "stderr": b"\xff\xfe broke"},
+                "exit status 1",
+                False,
+            ),
             "evaluation is interrupted": ({"interrupted": True, "stdout": "{}"}, "OPA could not evaluate", False),
         }
 
@@ -207,14 +222,32 @@ class RefusesAnythingThatIsNotOneWellFormedDecision(unittest.TestCase):
                         evaluate_policy(DEPLOY, POLICY, PROVEN)
                 self.assertIn(expected, str(refusal.exception))
 
-        # A missing OPA reaches the caller as exit 2 with nothing on stdout,
-        # not as a denial.
+        # An OPA that never finishes cannot hold the gate open. Only the bound
+        # is shortened here; the process really is waited on, and really times
+        # out.
         with tempfile.TemporaryDirectory() as directory:
-            result = run_cli(EXAMPLE / "intent.json", EXAMPLE / "evidence.json", path=fake_opa.missing(directory))
+            wedged = fake_opa.install(directory, stdout=json.dumps(fake_opa.envelope(ALLOWED)), wedged_for=30)
+            with on_path(wedged), mock.patch("lawman.opa.TIMEOUT_SECONDS", 0.5):
+                with self.assertRaises(LawmanError) as refusal:
+                    evaluate_policy(DEPLOY, POLICY, PROVEN)
 
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stdout, "")
-        self.assertIn("cannot run the OPA executable", result.stderr)
+        self.assertIn("did not decide", str(refusal.exception))
+        self.assertIn("within 0.5 seconds", str(refusal.exception))
+
+        # Through the CLI, each of these is exit 2 with nothing on stdout, not
+        # a denial.
+        for situation, fake in {
+            "missing executable": None,
+            "output that is not text": {"stdout": b"\xff\xfe{}"},
+        }.items():
+            with self.subTest(situation=situation), tempfile.TemporaryDirectory() as directory:
+                path = fake_opa.missing(directory) if fake is None else fake_opa.install(directory, **fake)
+                result = run_cli(EXAMPLE / "intent.json", EXAMPLE / "evidence.json", path=path)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+                self.assertTrue(result.stderr.startswith("lawman: "), result.stderr)
 
         # Interrupting Lawman itself, mid-evaluation, is also a refusal.
         stdout, stderr = io.StringIO(), io.StringIO()
