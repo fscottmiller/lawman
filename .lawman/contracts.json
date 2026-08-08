@@ -1,5 +1,0 @@
-{
-  "deploy": {
-    "production": "contracts/deploy-production.json"
-  }
-}

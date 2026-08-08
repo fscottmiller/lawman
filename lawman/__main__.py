@@ -11,8 +11,9 @@ import json
 import sys
 from typing import Sequence
 
-from .decision import Evidence, Intent, LawmanError, decide
-from .selection import POLICY_DIRECTORY, REGISTRY_FILE, _read_json, select_contract
+from .decision import Evidence, Intent, LawmanError
+from .opa import DECISION_DOCUMENT, evaluate_policy
+from .selection import POLICY_DIRECTORY, REGISTRY_FILE, _read_json, select_policy
 from .work import WorkContract, WorkEvidence, evaluate_work_contract
 
 
@@ -28,9 +29,9 @@ def _transition(argv: Sequence[str]) -> int:
         prog="lawman",
         description="Decide whether an intent may transition, given evidence.",
         epilog=(
-            f"The contract is selected from {POLICY_DIRECTORY}/{REGISTRY_FILE} in the current "
-            "directory, not supplied by the caller. "
-            "Run 'lawman work --help' to evaluate a work contract."
+            f"The policy is selected from {POLICY_DIRECTORY}/{REGISTRY_FILE} in the current "
+            f"directory and evaluated by OPA as {DECISION_DOCUMENT}. Neither is supplied by "
+            "the caller. Run 'lawman work --help' to evaluate a work contract."
         ),
     )
     parser.add_argument("--intent", required=True, metavar="PATH", help="JSON file: the requested action")
@@ -39,13 +40,16 @@ def _transition(argv: Sequence[str]) -> int:
 
     try:
         intent = Intent.from_dict(_read_json(args.intent, "intent"))
-        decision = decide(
+        decision = evaluate_policy(
             intent,
-            select_contract(intent),
+            select_policy(intent),
             Evidence.from_dict(_read_json(args.evidence, "evidence")),
         )
     except LawmanError as error:
         print(f"lawman: {error}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("lawman: interrupted before a policy decision was reached", file=sys.stderr)
         return 2
 
     print(json.dumps(decision.to_dict(), indent=2))

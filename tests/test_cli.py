@@ -1,4 +1,9 @@
-"""The CLI is the only interface, so it is tested the way it is used."""
+"""The CLI is the only interface, so it is tested the way it is used.
+
+Lawman's own half of the transition contract — exit codes, output bytes, and
+what the caller may say — is pinned here with a stand-in OPA, so it holds
+whatever a policy decides. `tests/test_opa.py` runs the real one.
+"""
 
 import json
 import os
@@ -8,23 +13,38 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import fake_opa
+
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "examples" / "deploy-to-production"
+WORK_EXAMPLE = ROOT / "examples" / "work-contract"
+POLICY = ROOT / ".lawman" / "policies" / "deploy-production.rego"
+
+ALLOWED = {"allowed": True, "reasons": ["Tests passed.", "A human approved this deploy."]}
+DENIED = {
+    "allowed": False,
+    "reasons": ["Tests did not pass.", "The change window is closed.", "No human approval was presented."],
+}
 
 
-def run(intent=EXAMPLE / "intent.json", evidence=EXAMPLE / "evidence.json", cwd=ROOT, extra=()):
+def run(*argv, cwd=ROOT, path=None):
     """Run Lawman as a governed repository would: from the repository root.
 
     `cwd` is the repository being governed. Lawman itself stays importable from
     anywhere, so a test can govern a temporary repository without installing.
+    `path` replaces PATH, which is how a test chooses the `opa` Lawman finds.
     """
     return subprocess.run(
-        [sys.executable, "-m", "lawman", "--intent", str(intent), "--evidence", str(evidence), *extra],
+        [sys.executable, "-m", "lawman", *[str(argument) for argument in argv]],
         cwd=cwd,
-        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        env={**os.environ, "PYTHONPATH": str(ROOT), **({} if path is None else {"PATH": path})},
         capture_output=True,
         text=True,
     )
+
+
+def transition(intent=EXAMPLE / "intent.json", evidence=EXAMPLE / "evidence.json", cwd=ROOT, path=None, extra=()):
+    return run("--intent", intent, "--evidence", evidence, *extra, cwd=cwd, path=path)
 
 
 def write(path, document):
@@ -33,141 +53,114 @@ def write(path, document):
     return path
 
 
-def governed_repository(directory, registry, contracts=()):
-    """A directory with a policy directory in it, ready to be run from."""
-    repository = Path(directory)
-    write(repository / ".lawman" / "contracts.json", registry)
-    for relative, contract in dict(contracts).items():
-        write(repository / ".lawman" / relative, contract)
-    return repository
+class ReportsWhatThePolicyDecided(unittest.TestCase):
+    def test_opa_allow_returns_decision_and_exit_0(self):
+        """AC4. A defined allow is a decision on stdout and exit 0."""
+        with tempfile.TemporaryDirectory() as directory:
+            result = transition(path=fake_opa.deciding(directory, ALLOWED))
 
-
-class CanonicalExample(unittest.TestCase):
-    def test_top_level_help_points_to_the_work_command(self):
-        result = subprocess.run(
-            [sys.executable, "-m", "lawman", "--help"],
-            cwd=ROOT,
-            env={**os.environ, "PYTHONPATH": str(ROOT)},
-            capture_output=True,
-            text=True,
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            result.stdout,
+            json.dumps(
+                {
+                    "allowed": True,
+                    "intent": {"action": "deploy", "target": "production"},
+                    "reasons": ["Tests passed.", "A human approved this deploy."],
+                },
+                indent=2,
+            )
+            + "\n",
         )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("lawman work --help", result.stdout)
-
-    def test_readme_command_allows_the_deploy(self):
-        result = run()
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        decision = json.loads(result.stdout)
-        self.assertTrue(decision["allowed"])
-        self.assertEqual(decision["intent"], {"action": "deploy", "target": "production"})
-        self.assertEqual(decision["satisfied"], ["tests_passed", "human_approved"])
-        self.assertIn("Allowed", decision["explanation"])
-
-    def test_failed_tests_deny_with_exit_code_1(self):
-        result = run(evidence=EXAMPLE / "evidence-tests-failed.json")
-
-        self.assertEqual(result.returncode, 1)
-        decision = json.loads(result.stdout)
-        self.assertFalse(decision["allowed"])
-        self.assertEqual(decision["failed"], ["tests_passed"])
-
-    def test_missing_evidence_denies_with_exit_code_1(self):
+    def test_opa_deny_returns_ordered_reasons_and_exit_1(self):
+        """AC5. A defined deny reports every reason, in policy order, and exits 1."""
         with tempfile.TemporaryDirectory() as directory:
-            result = run(evidence=write(Path(directory) / "evidence.json", {"tests_passed": True}))
+            result = transition(path=fake_opa.deciding(directory, DENIED))
 
         self.assertEqual(result.returncode, 1)
         decision = json.loads(result.stdout)
         self.assertFalse(decision["allowed"])
-        self.assertEqual(decision["unproven"], ["human_approved"])
+        self.assertEqual(decision["reasons"], DENIED["reasons"])
+        self.assertEqual(decision["intent"], {"action": "deploy", "target": "production"})
 
-    def test_output_is_byte_identical_across_runs(self):
-        first, second = run(), run()
+    def test_transition_output_is_byte_identical_across_runs(self):
+        """AC11. Same intent, evidence, policy, and OPA output: same bytes."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = fake_opa.deciding(directory, DENIED)
+            runs = [transition(path=path) for _ in range(3)]
 
-        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual({result.stdout for result in runs}, {runs[0].stdout})
+        self.assertEqual({result.returncode for result in runs}, {1})
+        self.assertEqual(json.loads(runs[0].stdout)["reasons"], DENIED["reasons"])
 
 
-class TheCallerCannotChooseTheContract(unittest.TestCase):
+class TheCallerCannotChooseTheRules(unittest.TestCase):
     """The requester picks what it wants to do, not the rules it is judged by."""
 
-    def test_there_is_no_contract_flag(self):
+    def test_the_caller_cannot_choose_policy_or_query(self):
+        """AC9. No flag names a policy, a contract, data, or a query."""
         with tempfile.TemporaryDirectory() as directory:
-            weaker = write(Path(directory) / "weak.json", {"requires": ["tests_passed"]})
-            result = run(extra=("--contract", str(weaker)))
+            weaker = write(Path(directory) / "weak.rego", "package lawman\n")
+            path = fake_opa.deciding(directory, ALLOWED)
+            for flag, value in (
+                ("--policy", weaker),
+                ("--contract", weaker),
+                ("--data", weaker),
+                ("--query", "data.weak.decision"),
+                ("--package", "weak"),
+                ("--input", weaker),
+            ):
+                with self.subTest(flag=flag):
+                    result = transition(path=path, extra=(flag, str(value)))
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("unrecognized arguments", result.stderr)
 
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stdout, "")
-        self.assertIn("unrecognized arguments", result.stderr)
+            help_text = run("--help").stdout
+            self.assertNotIn("--policy", help_text)
+            self.assertNotIn("--contract", help_text)
+            self.assertNotIn("--query", help_text)
+            self.assertIn("lawman work --help", help_text)
 
-    def test_a_weaker_contract_beside_the_intent_does_not_govern(self):
-        with tempfile.TemporaryDirectory() as directory:
-            requested = Path(directory)
-            write(requested / "contract.json", {"requires": ["tests_passed"]})
-            result = run(
-                intent=write(requested / "intent.json", {"action": "deploy", "target": "production"}),
-                evidence=write(requested / "evidence.json", {"tests_passed": True}),
+            # A policy sitting beside the requester's own files does not
+            # govern: OPA is handed the repository's policy, and nothing else.
+            record = Path(directory) / "received.json"
+            transition(
+                intent=write(Path(directory) / "intent.json", {"action": "deploy", "target": "production"}),
+                evidence=write(Path(directory) / "evidence.json", {"tests_passed": True}),
+                path=fake_opa.deciding(directory, ALLOWED, record=record),
             )
+            argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
 
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(json.loads(result.stdout)["unproven"], ["human_approved"])
+        self.assertIn(str(POLICY), argv)
+        self.assertNotIn(str(weaker), argv)
+        self.assertIn("data.lawman.decision", argv)
 
 
 class FailsClosedWhenItCannotFindTheRules(unittest.TestCase):
     """Exit 2, not exit 1. Lawman did not reach a verdict; it could not."""
 
-    def test_an_intent_with_no_configured_contract_exits_2(self):
+    def test_an_intent_with_no_configured_policy_exits_2(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = run(
-                intent=write(Path(directory) / "intent.json", {"action": "deploy", "target": "staging"}),
-            )
+            result = transition(intent=write(Path(directory) / "intent.json", {"action": "deploy", "target": "qa"}))
 
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
-        self.assertIn("no contract is configured for deploy -> staging", result.stderr)
+        self.assertIn("no policy is configured for deploy -> qa", result.stderr)
 
     def test_a_repository_with_no_policy_directory_exits_2(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = run(cwd=directory)
+            result = transition(cwd=directory)
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("cannot read contract registry", result.stderr)
-
-    def test_a_malformed_registry_exits_2(self):
-        with tempfile.TemporaryDirectory() as directory:
-            result = run(cwd=governed_repository(directory, "{ not json"))
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("not valid JSON", result.stderr)
-
-    def test_a_registry_that_is_not_nested_by_action_and_target_exits_2(self):
-        with tempfile.TemporaryDirectory() as directory:
-            result = run(cwd=governed_repository(directory, {"deploy": "contracts/deploy-production.json"}))
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("contract registry action 'deploy' must be an object", result.stderr)
-
-    def test_a_configured_contract_that_is_missing_exits_2(self):
-        with tempfile.TemporaryDirectory() as directory:
-            repository = governed_repository(directory, {"deploy": {"production": "contracts/deploy-production.json"}})
-            result = run(cwd=repository)
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("cannot read contract for deploy -> production", result.stderr)
-
-    def test_a_contract_outside_the_policy_directory_exits_2(self):
-        with tempfile.TemporaryDirectory() as directory:
-            write(Path(directory) / "weak.json", {"requires": ["tests_passed"]})
-            repository = governed_repository(directory, {"deploy": {"production": "../weak.json"}})
-            result = run(cwd=repository)
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("outside the policy directory", result.stderr)
+        self.assertIn("cannot read policy registry", result.stderr)
 
 
 class RefusesToGuess(unittest.TestCase):
     def test_unreadable_input_exits_2_and_explains(self):
-        result = run(evidence=EXAMPLE / "nope.json")
+        result = transition(evidence=EXAMPLE / "nope.json")
 
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
@@ -175,24 +168,69 @@ class RefusesToGuess(unittest.TestCase):
 
     def test_invalid_json_exits_2_and_explains(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = run(evidence=write(Path(directory) / "evidence.json", "{ not json"))
+            result = transition(evidence=write(Path(directory) / "evidence.json", "{ not json"))
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("not valid JSON", result.stderr)
 
-    def test_non_boolean_evidence_exits_2_and_explains(self):
+    def test_evidence_that_is_not_an_object_exits_2_and_explains(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = run(evidence=write(Path(directory) / "evidence.json", {"tests_passed": "yes"}))
+            result = transition(evidence=write(Path(directory) / "evidence.json", ["tests_passed"]))
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("must be true or false", result.stderr)
+        self.assertIn("evidence must be an object", result.stderr)
 
-    def test_a_malformed_intent_is_refused_before_a_contract_is_selected(self):
+    def test_a_malformed_intent_is_refused_before_a_policy_is_selected(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = run(intent=write(Path(directory) / "intent.json", {"action": "deploy"}))
+            result = transition(intent=write(Path(directory) / "intent.json", {"action": "deploy"}))
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("intent.target", result.stderr)
+
+
+class TheWorkCommandIsUntouched(unittest.TestCase):
+    def test_work_contract_command_remains_unchanged(self):
+        """AC12. Same command, same schema, same exit codes — and no OPA."""
+        with tempfile.TemporaryDirectory() as directory:
+            without_opa = fake_opa.missing(directory)
+            satisfied = run(
+                "work",
+                "--contract",
+                WORK_EXAMPLE / "contract.json",
+                "--evidence",
+                WORK_EXAMPLE / "evidence.json",
+                path=without_opa,
+            )
+            unsatisfied = run(
+                "work",
+                "--contract",
+                WORK_EXAMPLE / "contract.json",
+                "--evidence",
+                WORK_EXAMPLE / "evidence-missing-audit.json",
+                path=without_opa,
+            )
+            refused = run(
+                "work",
+                "--contract",
+                WORK_EXAMPLE / "contract.json",
+                "--evidence",
+                write(Path(directory) / "evidence.json", {"evidence": "AC1"}),
+                path=without_opa,
+            )
+
+        self.assertEqual(satisfied.returncode, 0, satisfied.stderr)
+        result = json.loads(satisfied.stdout)
+        self.assertTrue(result["satisfied"])
+        self.assertEqual(
+            set(result["criteria"][0]), {"id", "description", "status", "source", "explanation"}
+        )
+        self.assertEqual(result["criteria"][0]["status"], "proven")
+
+        self.assertEqual(unsatisfied.returncode, 1)
+        self.assertFalse(json.loads(unsatisfied.stdout)["satisfied"])
+
+        self.assertEqual(refused.returncode, 2)
+        self.assertEqual(refused.stdout, "")
 
 
 if __name__ == "__main__":
