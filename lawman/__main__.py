@@ -11,6 +11,7 @@ import json
 import sys
 from typing import Sequence
 
+from .ci import ExecutionContext, actions_evidence
 from .decision import Evidence, Intent, LawmanError
 from .github import TOKEN_VARIABLE, ContractSource, issue_contract
 from .opa import DECISION_DOCUMENT, evaluate_policy
@@ -64,21 +65,23 @@ def _work(argv: Sequence[str]) -> int:
         epilog=(
             "The contract comes from one local file or one canonical GitHub issue URL. A GitHub "
             f"read is authenticated with {TOKEN_VARIABLE} from the environment; no argument "
-            "accepts a token. Satisfying a work contract does not authorize a transition."
+            "accepts a token. --junit derives the evidence from the tests of the current GitHub "
+            "Actions execution, and requires --issue. Satisfying a work contract does not "
+            "authorize a transition."
         ),
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--contract", metavar="PATH", help="JSON file: acceptance criteria")
     source.add_argument("--issue", metavar="URL", help="GitHub issue: the authoritative contract")
-    parser.add_argument("--evidence", required=True, metavar="PATH", help="JSON file: criterion evidence")
+    proof = parser.add_mutually_exclusive_group(required=True)
+    proof.add_argument("--evidence", metavar="PATH", help="JSON file: criterion evidence")
+    proof.add_argument("--junit", metavar="PATH", help="JUnit XML: this execution's test results")
     args = parser.parse_args(argv)
 
     try:
         contract, source_identity = _contract(args)
-        result = evaluate_work_contract(
-            contract,
-            WorkEvidence.from_dict(_read_json(args.evidence, "work evidence")),
-        )
+        evidence, execution = _evidence(args, contract)
+        result = evaluate_work_contract(contract, evidence)
     except LawmanError as error:
         print(f"lawman: {error}", file=sys.stderr)
         return 2
@@ -87,6 +90,8 @@ def _work(argv: Sequence[str]) -> int:
         return 2
 
     document = result.to_dict()
+    if execution is not None:
+        document = {"execution": execution.to_dict(), **document}
     if source_identity is not None:
         document = {"contract_source": source_identity.to_dict(), **document}
     print(json.dumps(document, indent=2))
@@ -103,6 +108,21 @@ def _contract(args: argparse.Namespace) -> tuple[WorkContract, ContractSource | 
     if args.issue is not None:
         return issue_contract(args.issue)
     return WorkContract.from_dict(_read_json(args.contract, "work contract")), None
+
+
+def _evidence(args: argparse.Namespace, contract: WorkContract) -> tuple[WorkEvidence, ExecutionContext | None]:
+    """Read the evidence the caller wrote, or derive it from this execution.
+
+    Derived evidence says which execution produced it; a document the caller
+    presented cannot, so it carries no execution at all rather than one Lawman
+    made up. `--junit` requires `--issue` because deriving proof is only worth
+    anything against criteria the claimant did not also write (ADR 12).
+    """
+    if args.junit is None:
+        return WorkEvidence.from_dict(_read_json(args.evidence, "work evidence")), None
+    if args.issue is None:
+        raise LawmanError("--junit derives evidence for the issue that ordered the work, so it requires --issue")
+    return actions_evidence(contract, args.junit)
 
 
 if __name__ == "__main__":

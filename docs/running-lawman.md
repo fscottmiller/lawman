@@ -193,6 +193,107 @@ The contract came from the identified issue rather than from caller-controlled l
 
 Binding narrows what a claim may be made of, not who made it. **Lawman does not retrieve evidence**: the presented document still says what passed, and nothing here proves that the named source ran, exists, or told the truth.
 
+## Work evidence from GitHub Actions
+
+An issue contract with a caller-written evidence file still leaves half the question open: the document is typed by whoever wants it to pass. Run Lawman inside the GitHub Actions job that ran the tests, and the evidence comes from the tests instead ([ADR 12](decisions/0012-work-evidence-comes-from-the-execution.md)):
+
+```bash
+python -m lawman work \
+  --issue "$ISSUE_URL" \
+  --junit junit.xml
+```
+
+`--junit` replaces `--evidence`; exactly one of the two is required. `--junit` also requires `--issue`, because deriving proof against criteria the claimant wrote proves nothing new.
+
+### Producing the report
+
+Any test runner that writes a JUnit XML report will do. JUnit is the interchange format here, not a Lawman concept and not a Python one:
+
+```yaml
+- run: pytest --junitxml=junit.xml
+  continue-on-error: true
+- run: python -m lawman work --issue "$ISSUE_URL" --junit junit.xml
+```
+
+`continue-on-error: true` is the load-bearing line: a failing test should reach Lawman as a `failed` criterion, not end the job before the contract is judged. The complete workflow is [`examples/github-actions/verify-work.yml`](../examples/github-actions/verify-work.yml).
+
+The report must be written by this job. Lawman opens the path it is given, reads it once, and writes nothing — it downloads no artifact and looks up no workflow run.
+
+### How a test identity binds to `evidence_source`
+
+A test case answers to two names, and both are strings the report itself wrote:
+
+```xml
+<testsuites>
+  <testcase classname="tests.test_auth.Tokens" name="test_invalid_token"/>
+</testsuites>
+```
+
+* `test_invalid_token` — the `name` attribute
+* `tests.test_auth.Tokens.test_invalid_token` — `classname` + `.` + `name`
+
+A criterion's `evidence_source` is one of those two strings exactly, or it matched nothing at all. There is no prefix, suffix, substring, case fold, or alias — `TEST_INVALID_TOKEN`, `Tokens.test_invalid_token`, and `tests/test_auth.py::Tokens::test_invalid_token` are three different sources, and none of them is the two above. Bind whichever of the two names is unique in your suite.
+
+### The revision the result is bound to
+
+A derived result says which execution produced it:
+
+```json
+{
+  "execution": {
+    "type": "github_actions",
+    "repository": "fscottmiller/lawman",
+    "revision": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c",
+    "run_id": "17285941003",
+    "run_attempt": "1"
+  }
+}
+```
+
+* `revision` is `GITHUB_SHA` — **the exact commit this execution checked out and tested.** On a `pull_request` event that is the merge commit, which is what actually ran; Lawman reports what was tested rather than a branch head it never saw.
+* `GITHUB_ACTIONS`, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT` are all required, and all read from the environment. A missing or malformed one is refused with exit `2`.
+* Nothing is repaired: an abbreviated SHA, an uppercased one, or one with a newline appended is refused, because a value Actions did not set is somebody's edit.
+* **No argument supplies any of it.** There is no `--revision`, `--sha`, `--run-id`, or `--repository`, so the party asking to be judged cannot choose the revision it is judged against.
+
+A presented `--evidence` document carries no `execution` block. It cannot honestly claim one, so none is invented.
+
+### What each outcome means
+
+| CI evidence | Criterion status | Exit |
+| --- | --- | --- |
+| the bound test is present and passed | `proven` | `0` only when every criterion is proven |
+| the bound test is present and failed or errored | `failed` | `1` |
+| the bound test is absent from the report | `unproven` | `1` |
+| the bound test was skipped | `unproven` | `1` |
+
+**A skipped test reported no outcome.** It produces no evidence entry: calling it a failure blames a test that never ran, and calling it a pass is the substitution this tool exists to prevent. Job success is not proof either — the named test has to be in the report.
+
+Refusals are unchanged in kind: exit `2`, nothing on stdout, one line on stderr.
+
+| Situation | Exit |
+| --- | --- |
+| `GITHUB_ACTIONS` is not `true` — Lawman is not inside the execution | `2` |
+| `GITHUB_SHA` is missing, abbreviated, uppercased, or padded | `2` |
+| `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, or `GITHUB_RUN_ATTEMPT` is missing or malformed | `2` |
+| the report is missing, unreadable, or not well-formed XML | `2` |
+| the report's root element is not `<testsuites>` or `<testsuite>` | `2` |
+| a `<testcase>` carries no name | `2` |
+| two test cases answer to one bound identity | `2` |
+| the report is larger than 8388608 bytes | `2` |
+| `--junit` is used without `--issue` | `2` |
+
+An unreadable report is never read as "no tests ran": a parse failure that became `unproven` would make every truncated write look like an honest result.
+
+### What this v0 does and does not prove
+
+The supported path is deliberately narrow: **GitHub Actions only, running inside the execution, reading one JUnit report.** Remote workflow-run discovery, artifact downloads, the Checks API, other CI providers, evidence that is not a test report, and any evidence-provider plugin framework are all deliberately absent.
+
+The report is trusted as a product of the execution. Lawman does not prove the XML came from the test runner rather than from an `echo` — what it refuses to accept is a hand-written claim that a required test passed.
+
+And a passing test is not a good specification of a requirement. This says the named test ran, and what it said. Whether that test proves the criterion is the contract author's judgment.
+
+Satisfying a work contract this way still authorizes nothing. No work result reaches OPA, no Check is published, and no merge is decided.
+
 ## Transition policy
 
 Deployment to production is allowed only when tests have passed and a human has approved — because that is what this repository's Rego says, not because Lawman believes it.
@@ -394,6 +495,22 @@ Reading an issue — `tests/test_github.py`, against a local stand-in GitHub (`t
 | identical responses produce identical bytes | `SaysWhichContractItJudged.test_issue_contract_output_is_byte_identical_across_runs` |
 | no policy is selected, and no transition is authorized | `TheContractSourceIsTheOnlyThingItProves.test_issue_contract_evaluation_does_not_invoke_transition_policy` |
 
+Proving from an execution — `tests/test_ci.py`, against the stand-in GitHub and a JUnit report written into a temporary directory, with the Actions environment patched in:
+
+| Behavior | Test |
+| --- | --- |
+| an issue contract is proven from this run's report, with no evidence document | `DerivesEvidenceFromTheExecution.test_github_work_can_derive_evidence_from_junit` |
+| the execution is required, unrepaired, reported, and never an argument | `DerivesEvidenceFromTheExecution.test_ci_evidence_is_bound_to_actions_revision` |
+| two identities per case, matched exactly, and nothing near them | `DerivesEvidenceFromTheExecution.test_junit_test_identity_matching_is_exact` |
+| a passing case → `proven` | `DerivesEvidenceFromTheExecution.test_passing_junit_case_proves_bound_criterion` |
+| a failure or an error → `failed` | `DerivesEvidenceFromTheExecution.test_failing_junit_case_fails_bound_criterion` |
+| an absent or skipped case → `unproven`, with nothing invented | `DerivesEvidenceFromTheExecution.test_missing_junit_case_remains_unproven` |
+| two cases answering to one bound identity → refuse | `DerivesEvidenceFromTheExecution.test_ambiguous_junit_identity_is_refused` |
+| missing, unreadable, oversized, or malformed report → refuse | `DerivesEvidenceFromTheExecution.test_invalid_junit_report_is_refused` |
+| CI code produces `WorkEvidence`; the work domain still decides | `DerivesEvidenceFromTheExecution.test_ci_collection_delegates_to_existing_work_evaluator` |
+| the local-file and issue-plus-evidence paths are unchanged | `DerivesEvidenceFromTheExecution.test_existing_work_evidence_paths_remain_unchanged` |
+| identical contract, execution, and report → identical bytes | `DerivesEvidenceFromTheExecution.test_ci_evidence_evaluation_is_deterministic` |
+
 Deciding — `tests/test_opa.py`:
 
 | Behavior | Test |
@@ -417,7 +534,7 @@ Selecting — `tests/test_selection.py`:
 
 `tests/test_cli.py` covers exit codes, byte-identical output across runs, and `TheCallerCannotChooseTheRules` — that no `--policy`, `--contract`, `--data`, or `--query` flag exists, and that the policy OPA is handed is the repository's, not one sitting beside the requester's files.
 
-`tests/test_docs.py` checks that this guide, ADR 9, ADR 10, and ADR 11 still describe the interface the code actually has.
+`tests/test_docs.py` checks that this guide, the example workflow, ADR 9, ADR 10, ADR 11, and ADR 12 still describe the interface the code actually has.
 
 ## Why it looks like this
 
