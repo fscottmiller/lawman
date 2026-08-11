@@ -272,7 +272,7 @@ Refusals are unchanged in kind: exit `2`, nothing on stdout, one line on stderr.
 
 | Situation | Exit |
 | --- | --- |
-| `GITHUB_ACTIONS` is not `true` — Lawman is not inside the execution | `2` |
+| `GITHUB_ACTIONS` is not `true` | `2` |
 | `GITHUB_SHA` is missing, abbreviated, uppercased, or padded | `2` |
 | `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, or `GITHUB_RUN_ATTEMPT` is missing or malformed | `2` |
 | the report is missing, unreadable, or not well-formed XML | `2` |
@@ -289,6 +289,10 @@ An unreadable report is never read as "no tests ran": a parse failure that becam
 The supported path is deliberately narrow: **GitHub Actions only, running inside the execution, reading one JUnit report.** Remote workflow-run discovery, artifact downloads, the Checks API, other CI providers, evidence that is not a test report, and any evidence-provider plugin framework are all deliberately absent.
 
 The report is trusted as a product of the execution. Lawman does not prove the XML came from the test runner rather than from an `echo` — what it refuses to accept is a hand-written claim that a required test passed.
+
+The execution context is an assumption about the environment, not a verified fact. `GITHUB_ACTIONS=true` and four plausible values can be exported anywhere; Lawman reads the environment Actions sets, and does not authenticate the run. A derived result is worth what the reader's knowledge of where it ran is worth.
+
+`execution.repository` is reported, not enforced. It is never compared to the repository in the issue URL, so a fork's green run can satisfy an upstream issue's contract. Both values are in the result, and comparing them is a policy question rather than this command's.
 
 And a passing test is not a good specification of a requirement. This says the named test ran, and what it said. Whether that test proves the criterion is the contract author's judgment.
 

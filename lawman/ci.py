@@ -193,8 +193,11 @@ class JUnitReport:
         """
         carrying = [case for case in self.cases if identity in case.identities]
         if len(carrying) > 1:
+            # Quoted, because the identity comes from the contract and a
+            # criterion may bind a source carrying a newline. A refusal is one
+            # line, and a diagnostic that reprints its input verbatim is not.
             raise LawmanError(
-                f"the JUnit report identifies {len(carrying)} test cases as {identity}; "
+                f"the JUnit report identifies {len(carrying)} test cases as {identity!r}; "
                 "exactly one test can prove a criterion"
             )
         if not carrying or carrying[0].outcome == "skipped":
@@ -249,15 +252,31 @@ def _read(path: str) -> bytes:
 
 
 def _parse(raw: bytes, path: str) -> ElementTree.Element:
-    """Parse XML, or refuse. An unhandled parse error is a traceback, not a refusal."""
+    """Parse XML, or refuse. Not every unreadable document is a parse error.
+
+    A declared encoding Python has no codec for raises `LookupError`, which is
+    neither a `ParseError` nor a `ValueError` — and JVM and .NET runners write
+    charset names (`x-MacRoman`, `x-windows-949`) that Python does not have. A
+    document nested deeper than the stack raises `RecursionError`. Both are
+    reachable from a report Lawman did not write, and an unhandled one is a
+    traceback and exit 1 — which is a verdict, not the refusal this is.
+    """
     try:
         return ElementTree.fromstring(raw)
-    except (ElementTree.ParseError, ValueError) as error:
+    except (ElementTree.ParseError, LookupError, ValueError, RecursionError) as error:
         raise LawmanError(f"{path} is not a readable JUnit report: {_reason(error)}") from error
 
 
 def _case(element: ElementTree.Element, path: str) -> JUnitCase:
-    """One case, read verbatim. A failure outranks a skip; nothing outranks either."""
+    """One case, read verbatim. A failure outranks a skip; nothing outranks either.
+
+    JUnit says a passing case by saying nothing: no `<failure>`, `<error>`, or
+    `<skipped>` child. So an unrecognized child is not refused — `<system-out>`,
+    `<system-err>`, and `<properties>` are ordinary, and refusing them would
+    reject most real reports. Only direct children are read, which is where
+    every runner in the guide puts them; a failure buried inside a wrapper
+    element reads as a pass, and that is the known edge of this reading.
+    """
     name = element.get("name")
     if not isinstance(name, str) or not name:
         raise LawmanError(f"{path} has a <{CASE_TAG}> with no name; a test nobody can name proves nothing")

@@ -60,7 +60,11 @@ An unreadable report is never "no tests ran". Treating a parse failure as an emp
 
 The `--evidence` document keeps working, unchanged, for both `--contract` and `--issue`. It is now the weaker of the two paths, and that is visible in the result: derived evidence carries an `execution` block naming the revision, and a presented document carries nothing, because it cannot honestly claim one.
 
-**The report is trusted as a product of the execution.** Lawman reads the file the workflow points it at; it does not prove the XML came from the test runner rather than from an `echo`. What it refuses to accept is a hand-written claim that a required test passed — the workflow that fakes a report has to fake it inside the run, against the revision the result names, in a file the repository's own workflow produced.
+**The report is trusted as a product of the execution.** Lawman reads the file the workflow points it at; it does not prove the XML came from the test runner rather than from an `echo`. What it refuses to accept is a hand-written claim that a required test passed.
+
+**The execution context is an assumption about the environment, not a verified fact.** `GITHUB_ACTIONS=true` and four plausible values can be exported anywhere — a laptop, another CI, a shell. Lawman reads the environment Actions sets; it does not authenticate the run, and verifying one would need precisely the remote workflow-run lookup this slice defers. A derived result is worth what the reader's knowledge of where it ran is worth.
+
+**The execution's repository is reported, not enforced.** `GITHUB_REPOSITORY` is never compared to the `owner/repo` in the issue URL, so a fork's green run can satisfy an upstream issue's contract. The mismatch is visible — `contract_source.url` and `execution.repository` are both in the result — but nothing refuses it. Binding them is a rule the contract did not ask for, and it would break a governance repository holding the issue for work done elsewhere. A later policy comparing the two is the right place for that question.
 
 **A passing test is not a good specification of a requirement.** This ADR establishes that the named test ran and what it said. Whether that test actually proves the criterion is the contract author's judgment, and no tooling replaces it.
 

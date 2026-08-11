@@ -440,7 +440,7 @@ class DerivesEvidenceFromTheExecution(CiEvidenceTest):
             with self.subTest(situation=situation), self.issue() as server:
                 self.assertRefused(
                     verify(server.origin, junit),
-                    "the JUnit report identifies 2 test cases as test_revision_is_bound",
+                    "the JUnit report identifies 2 test cases as 'test_revision_is_bound'",
                 )
 
         # Ambiguity matters where evidence is matched. A contract binding the
@@ -484,6 +484,20 @@ class DerivesEvidenceFromTheExecution(CiEvidenceTest):
                 self.write('<testsuites><testcase classname="Bound"/></testsuites>', name="unnamed.xml"),
                 "a test nobody can name proves nothing",
             ),
+            # Not a parse error and not a ValueError: an encoding Python has no
+            # codec for raises LookupError out of the parser. JVM and .NET
+            # runners write charset names Python does not have.
+            "an encoding nobody has": (
+                self.write(
+                    '<?xml version="1.0" encoding="x-MacRoman"?><testsuites/>',
+                    name="charset.xml",
+                ),
+                "is not a readable JUnit report",
+            ),
+            "a document deeper than the stack": (
+                self.write("<testsuites>" + "<a>" * 60_000, name="deep.xml"),
+                "is not a readable JUnit report",
+            ),
             "an empty name": (
                 self.write('<testsuites><testcase name=""/></testsuites>', name="blank.xml"),
                 "a test nobody can name proves nothing",
@@ -500,11 +514,13 @@ class DerivesEvidenceFromTheExecution(CiEvidenceTest):
             with self.issue() as server:
                 self.assertRefused(verify(server.origin, self.report()), "is larger than 80 bytes")
 
-        # None of that is ever an unsatisfied result: refusing prints nothing.
+        # None of that is ever an unsatisfied result: refusing prints nothing,
+        # and exit 1 is reserved for a verdict a contract actually reached.
         with self.issue() as server:
             refused = verify(server.origin, self.write("<html/>", name="not-a-report.xml"))
 
         self.assertEqual(refused.exit_code, 2)
+        self.assertNotEqual(refused.exit_code, 1)
         self.assertNotIn("satisfied", refused.stdout)
         self.assertNotIn("unproven", refused.stdout)
 

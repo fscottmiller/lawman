@@ -313,6 +313,11 @@ class DocumentsThePublicContract(unittest.TestCase):
             "the slice is named": "**GitHub Actions only, running inside the execution, reading one JUnit report.**",
             "what is deferred": "Remote workflow-run discovery, artifact downloads, the Checks API",
             "the report is the run's product": "The report is trusted as a product of the execution",
+            "the context is an assumption": (
+                "The execution context is an assumption about the environment, not a verified fact"
+            ),
+            "the run is not authenticated": "does not authenticate the run",
+            "the repository is not enforced": "`execution.repository` is reported, not enforced",
             "a passing test is not a specification": "a passing test is not a good specification of a requirement",
             "nothing is authorized": "No work result reaches OPA",
         }
@@ -348,20 +353,35 @@ class DocumentsThePublicContract(unittest.TestCase):
                 "Discovering a workflow run through the API, downloading artifacts, or publishing a Check"
             ),
             "records the trust limit": "**The report is trusted as a product of the execution.**",
+            "records that the context is assumed": (
+                "**The execution context is an assumption about the environment, not a verified fact.**"
+            ),
+            "records the unbound repository": "**The execution's repository is reported, not enforced.**",
             "records what a passing test is not": "**A passing test is not a good specification of a requirement.**",
         }.items():
             with self.subTest(claim=claim):
                 self.assertIn(expected, adr)
 
-        # The example workflow runs the tests first and verifies afterwards,
-        # in one job, and hands Lawman no revision.
+        # The example workflow installs what it runs, runs the tests first,
+        # verifies afterwards, in one job, and hands Lawman no revision. A
+        # copy-me example that cannot run is documentation of nothing.
         self.assertTrue(EXAMPLE_WORKFLOW.is_file(), EXAMPLE_WORKFLOW)
         example = EXAMPLE_WORKFLOW.read_text(encoding="utf-8")
+        runner_step = example.index("pip install pytest")
+        lawman_step = example.index("repository: fscottmiller/lawman")
         tests_step = example.index("pytest --junitxml=junit.xml")
         verify_step = example.index('python -m lawman work --issue "$ISSUE_URL" --junit junit.xml')
 
+        self.assertLess(runner_step, tests_step)
+        self.assertLess(lawman_step, verify_step)
         self.assertLess(tests_step, verify_step)
         self.assertIn("actions/checkout@v4", example)
+
+        # Lawman is not installable (ADR 2), so the example runs it as a module
+        # from its own checkout rather than pretending `pip install lawman`.
+        self.assertIn("PYTHONPATH: .lawman-tool", example)
+        self.assertIn("path: .lawman-tool", example)
+        self.assertNotIn("pip install lawman", example)
         for absent in ("--revision", "--sha", "--commit", "--evidence"):
             with self.subTest(absent=absent):
                 self.assertNotIn(absent, example)
