@@ -30,7 +30,10 @@ jobs:
         run: pip install pytest
 
       # Lawman is not installable and has no runtime dependencies (ADR 2), so
-      # it is checked out beside the work and run as a module.
+      # it is checked out beside the work and run as a module. The dot prefix
+      # on the path is load-bearing: pytest skips dot-directories by default,
+      # so Lawman's own tests stay out of the report being judged. Without it
+      # they would appear as test cases the contract never asked about.
       #
       # `ref` is a placeholder, and checkout fails until it is replaced with a
       # tag or a commit SHA. That is deliberate: the gate deciding whether work

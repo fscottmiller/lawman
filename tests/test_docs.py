@@ -283,6 +283,9 @@ class DocumentsThePublicContract(unittest.TestCase):
             "nothing near a name matches": "There is no prefix, suffix, substring, case fold, or alias",
             "the near misses are shown": "tests/test_auth.py::Tokens::test_invalid_token",
             "which one to bind": "Bind whichever of the two names is unique in your suite",
+            "one test cannot prove two criteria": (
+                "**And no two criteria may be answered by the same test case.**"
+            ),
         }
         revision = {
             "the execution block is shown": '"type": "github_actions"',
@@ -305,6 +308,7 @@ class DocumentsThePublicContract(unittest.TestCase):
             "a malformed execution refuses": f"| `{ACTIONS_VARIABLE}` is not `true`",
             "an unreadable report refuses": "| the report is missing, unreadable, or not well-formed XML | `2` |",
             "an ambiguous identity refuses": "| two test cases answer to one bound identity | `2` |",
+            "a shared test case refuses": "| one test case answers two criteria | `2` |",
             "the bound size is the code's": f"| the report is larger than {MAXIMUM_REPORT_BYTES} bytes | `2` |",
             "--junit needs --issue": "| `--junit` is used without `--issue` | `2` |",
             "an unreadable report is not an empty run": 'An unreadable report is never read as "no tests ran"',
@@ -347,6 +351,7 @@ class DocumentsThePublicContract(unittest.TestCase):
             ),
             "records the execution anchor": "### The execution is the anchor, and it is not an argument",
             "records exact identity": "### A test identity is exact, and a case has exactly two of them",
+            "records one test, one criterion": "**One test proves one criterion**",
             "records absent versus refused": "### Absent is unproven. Ambiguous or unreadable is refused",
             "records the delegation": "does not know the words `proven`, `failed`, or `unproven`",
             "records why nothing is fetched": (
@@ -388,7 +393,7 @@ class DocumentsThePublicContract(unittest.TestCase):
         # `ref` and means it: a placeholder that fails until it is replaced,
         # never a branch the example silently tracks.
         self.assertIn("ref: TAG_OR_COMMIT_SHA", example)
-        self.assertIn("checkout fails until it is replaced with a\n      # tag or a commit SHA", example)
+        self.assertIn("`ref` is a placeholder", example)
         for tracked in ("ref: main", "ref: master", "ref: HEAD"):
             with self.subTest(tracked=tracked):
                 self.assertNotIn(tracked, example)

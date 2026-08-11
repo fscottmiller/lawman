@@ -455,6 +455,21 @@ class DerivesEvidenceFromTheExecution(CiEvidenceTest):
         self.assertEqual(resolved.exit_code, 0, resolved.stderr)
         self.assertEqual(resolved.statuses, ["proven", "proven"])
 
+        # The other direction is ambiguity too: one case answers to two
+        # identities, so two criteria can bind two different strings and reach
+        # the same test. The contract's unique-source rule cannot see that —
+        # the strings differ — and one passing test would discharge both.
+        one_case = self.report(((CLASS, "test_evidence_is_derived", "passed"),), name="one.xml")
+        both = [
+            ("AC1", "Bound to the bare name", "test_evidence_is_derived"),
+            ("AC2", "Bound to the qualified name", f"{CLASS}.test_evidence_is_derived"),
+        ]
+        with self.issue(both) as server:
+            self.assertRefused(
+                verify(server.origin, one_case),
+                "one JUnit test case answers both 'AC1' and 'AC2'; one test cannot prove two criteria",
+            )
+
         # And duplicates no criterion binds are not Lawman's business.
         elsewhere = self.report(
             PASSING + (("tests.test_other.Other", "test_unrelated", "failed"), (CLASS, "test_unrelated", "passed")),
@@ -478,7 +493,7 @@ class DerivesEvidenceFromTheExecution(CiEvidenceTest):
             ),
             "XML that is not a report": (
                 self.write("<html><body>green</body></html>", name="page.xml"),
-                "the root element is <html>, not <testsuites>",
+                "the root element is <html>, not <testsuites> or <testsuite>",
             ),
             "a case nobody can name": (
                 self.write('<testsuites><testcase classname="Bound"/></testsuites>', name="unnamed.xml"),
@@ -494,9 +509,12 @@ class DerivesEvidenceFromTheExecution(CiEvidenceTest):
                 ),
                 "is not a readable JUnit report",
             ),
-            "a document deeper than the stack": (
-                self.write("<testsuites>" + "<a>" * 60_000, name="deep.xml"),
-                "is not a readable JUnit report",
+            # `--junit` is a caller argument, and a diagnostic that reprints it
+            # verbatim lets the caller write a second line of Lawman's output.
+            # `assertRefused` insists on exactly one.
+            "a path pretending to be a diagnostic": (
+                self.directory / "junk\nlawman: satisfied",
+                "cannot read the JUnit report",
             ),
             "an empty name": (
                 self.write('<testsuites><testcase name=""/></testsuites>', name="blank.xml"),
@@ -520,7 +538,6 @@ class DerivesEvidenceFromTheExecution(CiEvidenceTest):
             refused = verify(server.origin, self.write("<html/>", name="not-a-report.xml"))
 
         self.assertEqual(refused.exit_code, 2)
-        self.assertNotEqual(refused.exit_code, 1)
         self.assertNotIn("satisfied", refused.stdout)
         self.assertNotIn("unproven", refused.stdout)
 

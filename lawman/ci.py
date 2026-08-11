@@ -176,20 +176,18 @@ class JUnitReport:
         """
         root = _parse(_read(path), path)
         if root.tag not in ROOT_TAGS:
-            raise LawmanError(f"{path} is not a JUnit report: the root element is <{root.tag}>, not <testsuites>")
+            raise LawmanError(
+                f"{path!r} is not a JUnit report: the root element is <{root.tag}>, "
+                "not <testsuites> or <testsuite>"
+            )
         return cls(cases=tuple(_case(element, path) for element in root.iter(CASE_TAG)))
 
-    def passed(self, identity: str) -> bool | None:
-        """Whether the one case carrying this identity passed.
+    def case(self, identity: str) -> JUnitCase | None:
+        """The one case carrying this identity, or `None` when nothing does.
 
-        `None` means the report did not answer for it: nothing carried the
-        identity, or the case that did was skipped. A skipped test reported no
-        outcome, and calling that a failure would blame a test that never ran.
-        Either way no evidence is produced, and the criterion stays unproven.
-
-        Two cases carrying one identity is not an answer either. Picking the
-        first, the last, or the passing one is Lawman deciding which test the
-        contract meant, so it is refused.
+        Two cases carrying one identity is not an answer. Picking the first,
+        the last, or the passing one is Lawman deciding which test the contract
+        meant, so it is refused.
         """
         carrying = [case for case in self.cases if identity in case.identities]
         if len(carrying) > 1:
@@ -200,9 +198,7 @@ class JUnitReport:
                 f"the JUnit report identifies {len(carrying)} test cases as {identity!r}; "
                 "exactly one test can prove a criterion"
             )
-        if not carrying or carrying[0].outcome == "skipped":
-            return None
-        return carrying[0].outcome == "passed"
+        return carrying[0] if carrying else None
 
 
 def actions_evidence(contract: WorkContract, report_path: str) -> tuple[WorkEvidence, ExecutionContext]:
@@ -212,19 +208,35 @@ def actions_evidence(contract: WorkContract, report_path: str) -> tuple[WorkEvid
     read without knowing which revision produced it is evidence about nothing.
 
     One entry per criterion the report answered for, in contract order. A
-    criterion the report is silent about gets no entry at all — inventing a
-    `passed: false` would report a failure nobody observed, and inventing
-    anything else would be worse.
+    criterion the report is silent about gets no entry at all — and neither
+    does one whose test was skipped, because a skipped test reported no
+    outcome. Calling that a failure would blame a test that never ran, and
+    inventing a `passed: false` would report a failure nobody observed.
+
+    One test cannot prove two criteria. The contract already refuses two
+    criteria naming one `evidence_source` (ADR 11), but a case answers to two
+    identities, so two different strings can reach the same test. This is the
+    only place that can see they did: the work domain compares source names,
+    and by then both look like separate proof.
     """
     context = ExecutionContext.current()
     report = JUnitReport.from_path(report_path)
     entries: list[CriterionEvidence] = []
+    proving: dict[JUnitCase, str] = {}
     for criterion in contract.criteria:
-        passed = report.passed(criterion.evidence_source)
-        if passed is None:
+        case = report.case(criterion.evidence_source)
+        if case is None or case.outcome == "skipped":
             continue
+        proved = proving.setdefault(case, criterion.id)
+        if proved != criterion.id:
+            raise LawmanError(
+                f"one JUnit test case answers both {proved!r} and {criterion.id!r}; "
+                "one test cannot prove two criteria"
+            )
         entries.append(
-            CriterionEvidence(criterion_id=criterion.id, source=criterion.evidence_source, passed=passed)
+            CriterionEvidence(
+                criterion_id=criterion.id, source=criterion.evidence_source, passed=case.outcome == "passed"
+            )
         )
     return WorkEvidence(entries=tuple(entries)), context
 
@@ -241,13 +253,19 @@ def _matches(pattern: re.Pattern[str], value: Any, variable: str, expected: str)
 
 
 def _read(path: str) -> bytes:
+    """Read the report, bounded. The path is quoted wherever it is reported.
+
+    `--junit` is a caller argument, and a caller who can put a newline in it
+    can write a second line of Lawman's own diagnostics. A refusal is one line,
+    so nothing interpolates the path unquoted.
+    """
     try:
         with open(path, "rb") as handle:
             raw = handle.read(MAXIMUM_REPORT_BYTES + 1)
     except OSError as error:
-        raise LawmanError(f"cannot read the JUnit report {path}: {_reason(error)}") from error
+        raise LawmanError(f"cannot read the JUnit report {path!r}: {_reason(error)}") from error
     if len(raw) > MAXIMUM_REPORT_BYTES:
-        raise LawmanError(f"the JUnit report {path} is larger than {MAXIMUM_REPORT_BYTES} bytes")
+        raise LawmanError(f"the JUnit report {path!r} is larger than {MAXIMUM_REPORT_BYTES} bytes")
     return raw
 
 
@@ -256,15 +274,18 @@ def _parse(raw: bytes, path: str) -> ElementTree.Element:
 
     A declared encoding Python has no codec for raises `LookupError`, which is
     neither a `ParseError` nor a `ValueError` — and JVM and .NET runners write
-    charset names (`x-MacRoman`, `x-windows-949`) that Python does not have. A
-    document nested deeper than the stack raises `RecursionError`. Both are
-    reachable from a report Lawman did not write, and an unhandled one is a
+    charset names (`x-MacRoman`, `x-windows-949`) that Python does not have. It
+    is reachable from a report Lawman did not write, and an unhandled one is a
     traceback and exit 1 — which is a verdict, not the refusal this is.
+
+    Depth is not on that list: expat parses iteratively, so a document nested
+    deeper than the stack does not raise `RecursionError` the way `json.loads`
+    does in `github.py`. Nothing here catches an exception nobody can produce.
     """
     try:
         return ElementTree.fromstring(raw)
-    except (ElementTree.ParseError, LookupError, ValueError, RecursionError) as error:
-        raise LawmanError(f"{path} is not a readable JUnit report: {_reason(error)}") from error
+    except (ElementTree.ParseError, LookupError, ValueError) as error:
+        raise LawmanError(f"{path!r} is not a readable JUnit report: {_reason(error)}") from error
 
 
 def _case(element: ElementTree.Element, path: str) -> JUnitCase:
@@ -279,7 +300,7 @@ def _case(element: ElementTree.Element, path: str) -> JUnitCase:
     """
     name = element.get("name")
     if not isinstance(name, str) or not name:
-        raise LawmanError(f"{path} has a <{CASE_TAG}> with no name; a test nobody can name proves nothing")
+        raise LawmanError(f"{path!r} has a <{CASE_TAG}> with no name; a test nobody can name proves nothing")
     outcome: Outcome = "passed"
     if any(child.tag in FAILURE_TAGS for child in element):
         outcome = "failed"

@@ -234,6 +234,8 @@ A test case answers to two names, and both are strings the report itself wrote:
 
 A criterion's `evidence_source` is one of those two strings exactly, or it matched nothing at all. There is no prefix, suffix, substring, case fold, or alias — `TEST_INVALID_TOKEN`, `Tokens.test_invalid_token`, and `tests/test_auth.py::Tokens::test_invalid_token` are three different sources, and none of them is the two above. Bind whichever of the two names is unique in your suite.
 
+**And no two criteria may be answered by the same test case.** The contract already refuses two criteria naming one `evidence_source` ([ADR 11](decisions/0011-acceptance-criteria-bind-their-evidence.md)), but a case answers to two names, so two different strings can reach one test. Lawman refuses that report rather than letting one passing test discharge two obligations.
+
 ### The revision the result is bound to
 
 A derived result says which execution produced it:
@@ -253,7 +255,7 @@ A derived result says which execution produced it:
 * `revision` is `GITHUB_SHA` — **the exact commit this execution checked out and tested.** On a `pull_request` event that is the merge commit, which is what actually ran; Lawman reports what was tested rather than a branch head it never saw.
 * `GITHUB_ACTIONS`, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT` are all required, and all read from the environment. A missing or malformed one is refused with exit `2`.
 * Nothing is repaired: an abbreviated SHA, an uppercased one, or one with a newline appended is refused, because a value Actions did not set is somebody's edit.
-* **No argument supplies any of it.** There is no `--revision`, `--sha`, `--run-id`, or `--repository`, so the party asking to be judged cannot choose the revision it is judged against.
+* **No argument supplies any of it.** There is no `--revision`, `--sha`, `--run-id`, or `--repository`, so nothing on the command line names the revision. The environment those values come from is still an assumption — see below.
 
 A presented `--evidence` document carries no `execution` block. It cannot honestly claim one, so none is invented.
 
@@ -279,6 +281,7 @@ Refusals are unchanged in kind: exit `2`, nothing on stdout, one line on stderr.
 | the report's root element is not `<testsuites>` or `<testsuite>` | `2` |
 | a `<testcase>` carries no name | `2` |
 | two test cases answer to one bound identity | `2` |
+| one test case answers two criteria | `2` |
 | the report is larger than 8388608 bytes | `2` |
 | `--junit` is used without `--issue` | `2` |
 

@@ -38,6 +38,8 @@ A `<testcase>` answers to `name`, and to `classname` + `.` + `name`. Both are st
 
 A contract binds whichever of the two is unique. `test_invalid_token` is enough when one test carries it; `tests.test_auth.Tokens.test_invalid_token` is there for when it is not.
 
+Ambiguity is refused in both directions. Two cases carrying one bound identity is the obvious one. The other is that two criteria can bind two different strings — a bare name and a qualified name — that reach the same case, and one passing test would then discharge two obligations. ADR 11's one-to-one rule compares source strings, so it cannot see that; this module is the only place that can, because it is the only place that knows an identifier is a test. **One test proves one criterion**, and a report where it would prove two is refused.
+
 ### Absent is unproven. Ambiguous or unreadable is refused
 
 The distinction ADR 11 drew survives contact with a real report:
@@ -45,7 +47,7 @@ The distinction ADR 11 drew survives contact with a real report:
 * a required test present and passing → `passed: true` → `proven`
 * a required test present and failing or erroring → `passed: false` → `failed`
 * a required test absent, or skipped → **no evidence entry at all** → `unproven`
-* two cases carrying one bound identity → refused, exit `2`
+* two cases carrying one bound identity, or one case answering two criteria → refused, exit `2`
 * a missing, unreadable, or malformed report → refused, exit `2`
 
 A skipped test reported no outcome. Calling it a failure blames a test that never ran, and calling it a pass is the lie the whole tool exists to prevent, so it produces nothing and the criterion stays owed.
