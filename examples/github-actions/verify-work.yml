@@ -30,12 +30,17 @@ jobs:
         run: pip install pytest
 
       # Lawman is not installable and has no runtime dependencies (ADR 2), so
-      # it is checked out beside the work and run as a module. Pin a tag or a
-      # SHA in `ref` rather than tracking a moving branch.
+      # it is checked out beside the work and run as a module.
+      #
+      # `ref` is a placeholder, and checkout fails until it is replaced with a
+      # tag or a commit SHA. That is deliberate: the gate deciding whether work
+      # is done should not change under the repository it is judging, and a
+      # default branch is a moving target. Failing loudly beats tracking one.
       - name: Get Lawman
         uses: actions/checkout@v4
         with:
           repository: fscottmiller/lawman
+          ref: TAG_OR_COMMIT_SHA
           path: .lawman-tool
 
       # Any runner that writes a JUnit XML report will do. JUnit is the

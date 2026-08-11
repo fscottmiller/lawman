@@ -382,6 +382,16 @@ class DocumentsThePublicContract(unittest.TestCase):
         self.assertIn("PYTHONPATH: .lawman-tool", example)
         self.assertIn("path: .lawman-tool", example)
         self.assertNotIn("pip install lawman", example)
+
+        # And that checkout is pinned. A gate that decides whether work is done
+        # must not move under the repository it judges, so the example says
+        # `ref` and means it: a placeholder that fails until it is replaced,
+        # never a branch the example silently tracks.
+        self.assertIn("ref: TAG_OR_COMMIT_SHA", example)
+        self.assertIn("checkout fails until it is replaced with a\n      # tag or a commit SHA", example)
+        for tracked in ("ref: main", "ref: master", "ref: HEAD"):
+            with self.subTest(tracked=tracked):
+                self.assertNotIn(tracked, example)
         for absent in ("--revision", "--sha", "--commit", "--evidence"):
             with self.subTest(absent=absent):
                 self.assertNotIn(absent, example)
