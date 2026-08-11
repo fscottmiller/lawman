@@ -4,6 +4,7 @@ These are not prose reviews. Each assertion names something a reader has to be
 told to use Lawman, or something the code would silently contradict.
 """
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -12,8 +13,10 @@ ROOT = Path(__file__).resolve().parent.parent
 GUIDE = ROOT / "docs" / "running-lawman.md"
 ADR = ROOT / "docs" / "decisions" / "0009-delegate-transition-policy-to-opa.md"
 ISSUE_ADR = ROOT / "docs" / "decisions" / "0010-work-contracts-can-come-from-github-issues.md"
+BINDING_ADR = ROOT / "docs" / "decisions" / "0011-acceptance-criteria-bind-their-evidence.md"
 README = ROOT / "README.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+EXAMPLE = ROOT / "examples" / "work-contract"
 
 
 class DocumentsThePublicContract(unittest.TestCase):
@@ -104,8 +107,8 @@ class DocumentsThePublicContract(unittest.TestCase):
             "the node ID says which issue": "says **which issue**, permanently",
             "the hash says which contract": "SHA-256 of the normalized semantic contract",
             "normalization is specified": (
-                "criteria in issue order, each reduced to `id` and `description`, sorted keys, "
-                "compact separators, UTF-8, lowercase hex"
+                "criteria in issue order, each reduced to `id`, `description`, and `evidence_source`, "
+                "sorted keys, compact separators, UTF-8, lowercase hex"
             ),
             "updated_at is not identity": "`updated_at` is trace information, not identity",
             "local output is unchanged": "carries no `contract_source`",
@@ -158,6 +161,97 @@ class DocumentsThePublicContract(unittest.TestCase):
         readme = README.read_text(encoding="utf-8")
         self.assertIn("--issue https://github.com/fscottmiller/lawman/issues/8", readme)
         self.assertIn("lawman-work-contract", readme)
+
+    def test_evidence_binding_documentation_matches_the_public_contract(self):
+        """AC12 of #12. The field, the rule, the schema, the refusals, the hash, the boundary."""
+        guide = GUIDE.read_text(encoding="utf-8")
+
+        field = {
+            "shows the contract field": (
+                '{ "id": "AC1", "description": "Invalid tokens return 401", '
+                '"evidence_source": "test_invalid_token" }'
+            ),
+            "the evidence schema is unchanged": '{ "criterion_id": "AC1", "source": "test_invalid_token", '
+            '"passed": true }',
+            "an issue contract carries bindings too": '"evidence_source": "test_valid_token" }',
+        }
+        binding_rule = {
+            "one source per criterion": "Each criterion requires exactly one evidence source",
+            "no source covers two": "no source may prove two criteria",
+            "both fields must match": "its `criterion_id` **and** its `source` are the ones the contract named",
+            "matching is exact": "Matching is exact and case-sensitive",
+            "identifiers are opaque": "Lawman does not interpret test names, paths, check names, or prefixes",
+        }
+        result_schema = {
+            "the result names both sources": (
+                "`evidence_source` is what the contract requires; `source` is what was presented, "
+                "or `null` when nothing was"
+            ),
+            "the unproven explanation names the owed source": (
+                '"explanation": "Unproven: no evidence from test_authentication_audit_event was provided."'
+            ),
+            "statuses are defined against the binding": "`proven` — the bound source was presented and passed",
+        }
+        refusals = {
+            "the distinction is stated": (
+                "A missing entry is an unsatisfied result; a wrong source is malformed evidence"
+            ),
+            "silence is unsatisfied, not refused": "| no evidence names the criterion | `1` |",
+            "a wrong source is refused": "| evidence names a criterion but not the source it bound | `2` |",
+            "an unbound criterion is refused": "| a criterion has no `evidence_source`, or a blank one | `2` |",
+            "a shared source is refused": "| two criteria share one `evidence_source` | `2` |",
+            "the example is named": "`evidence-wrong-source.json` is a claim against the wrong source",
+        }
+        identity = {
+            "the hash covers the binding": "each reduced to `id`, `description`, and `evidence_source`",
+            "changing a binding moves it": "**changing only a binding**",
+        }
+        boundary = {
+            "migration is stated": "A contract without `evidence_source` is refused, and no default is supplied",
+            "retrieval is not built": "**Lawman does not retrieve evidence**",
+            "existence is not checked": "it does not run the source, fetch it, or check that it exists",
+            "binding is not trust": "Binding says which proof was owed — not that the proof is trustworthy",
+        }
+
+        for section, claims in (
+            ("the contract field", field),
+            ("the binding rule", binding_rule),
+            ("the result schema", result_schema),
+            ("refusal versus unsatisfied", refusals),
+            ("contract identity", identity),
+            ("the evidence boundary", boundary),
+        ):
+            for claim, expected in claims.items():
+                with self.subTest(section=section, claim=claim):
+                    self.assertIn(expected, guide)
+
+        adr = BINDING_ADR.read_text(encoding="utf-8")
+        for claim, expected in {
+            "is accepted": "Status: Accepted",
+            "records the new flow": "**Work Contract → Bound Evidence → Work Contract Result.**",
+            "records the one-to-one rule": "### One criterion, one source",
+            "records exact, opaque matching": "The identifier is opaque and compared exactly",
+            "records refusal versus unsatisfied": "### A missing entry is a result. A wrong source is not",
+            "records the hash change": "Changing only a binding changes the hash",
+            "records that nothing is defaulted": "No compatibility default for a contract without `evidence_source`",
+            "records the retrieval boundary": "**Lawman does not retrieve evidence.**",
+        }.items():
+            with self.subTest(claim=claim):
+                self.assertIn(expected, adr)
+
+        # The README advertises the model the code actually enforces.
+        readme = README.read_text(encoding="utf-8")
+        self.assertIn("**Work Contract → Bound Evidence → Work Contract Result**", readme)
+        self.assertIn("evidence_source", readme)
+
+        # And the documented contracts are the ones the repository ships.
+        for name in ("contract.json", "evidence.json", "evidence-missing-audit.json", "evidence-wrong-source.json"):
+            with self.subTest(example=name):
+                self.assertTrue((EXAMPLE / name).is_file(), name)
+        contract = json.loads((EXAMPLE / "contract.json").read_text(encoding="utf-8"))
+        sources = [criterion["evidence_source"] for criterion in contract["criteria"]]
+        self.assertEqual(sources, ["test_invalid_token", "test_valid_token", "test_authentication_audit_event"])
+        self.assertEqual(len(set(sources)), len(sources))
 
     def test_the_guide_does_not_advertise_a_retired_transition_contract(self):
         guide = GUIDE.read_text(encoding="utf-8")

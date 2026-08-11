@@ -222,7 +222,8 @@ class TheWorkCommandIsUntouched(unittest.TestCase):
         result = json.loads(satisfied.stdout)
         self.assertTrue(result["satisfied"])
         self.assertEqual(
-            set(result["criteria"][0]), {"id", "description", "status", "source", "explanation"}
+            set(result["criteria"][0]),
+            {"id", "description", "evidence_source", "status", "source", "explanation"},
         )
         self.assertEqual(result["criteria"][0]["status"], "proven")
 

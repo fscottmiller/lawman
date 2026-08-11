@@ -168,14 +168,20 @@ def issue_contract(url: str) -> tuple[WorkContract, ContractSource]:
 def fingerprint(contract: WorkContract) -> str:
     """Hash what the contract says, not how the issue said it.
 
-    The criteria in order, each reduced to its ID and description, serialized
-    with sorted keys and no whitespace. Rewording the prose around the block,
-    reindenting the JSON, or reordering its keys leaves the hash alone;
-    changing a criterion does not. That is the property later policy needs: a
-    version identity it can compare, bound to content rather than to a
-    timestamp anyone can move.
+    The criteria in order, each reduced to its ID, description, and required
+    evidence source, serialized with sorted keys and no whitespace. Rewording
+    the prose around the block, reindenting the JSON, or reordering its keys
+    leaves the hash alone; changing a criterion does not. The binding is part
+    of the obligation, so moving it moves the hash (ADR 11). That is the
+    property later policy needs: a version identity it can compare, bound to
+    content rather than to a timestamp anyone can move.
     """
-    normalized = {"criteria": [{"description": item.description, "id": item.id} for item in contract.criteria]}
+    normalized = {
+        "criteria": [
+            {"description": item.description, "evidence_source": item.evidence_source, "id": item.id}
+            for item in contract.criteria
+        ]
+    }
     encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
