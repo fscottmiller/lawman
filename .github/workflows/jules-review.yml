@@ -1,0 +1,42 @@
+name: Jules review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request number to review
+        required: true
+        type: string
+
+concurrency:
+  group: jules-review-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pull_request }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Explain skipped review
+        if: >-
+          github.event_name == 'pull_request' &&
+          (github.event.pull_request.draft ||
+          github.event.pull_request.head.repo.full_name != github.repository)
+        run: python -m lawman.jules_review --event "$GITHUB_EVENT_PATH" --guard-only
+
+      - name: Run advisory Jules review
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (!github.event.pull_request.draft &&
+          github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: python -m lawman.jules_review --event "$GITHUB_EVENT_PATH"
