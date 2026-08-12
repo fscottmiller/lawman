@@ -2,6 +2,7 @@ name: Jules review
 
 on:
   pull_request_target:
+    branches: [main]
     types: [opened, reopened, ready_for_review, synchronize]
   workflow_dispatch:
     inputs:
@@ -52,6 +53,7 @@ jobs:
 
       - name: Run advisory Jules review
         continue-on-error: true
+        timeout-minutes: 22
         env:
           GITHUB_TOKEN: ${{ github.token }}
           JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
