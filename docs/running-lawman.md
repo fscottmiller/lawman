@@ -301,6 +301,64 @@ And a passing test is not a good specification of a requirement. This says the n
 
 Satisfying a work contract this way still authorizes nothing. No work result reaches OPA, no Check is published, and no merge is decided.
 
+## Lawman's v0 pull-request gate
+
+Lawman governs its own pull requests in the stable **Lawman** Actions job. A
+pull request body must contain exactly one standalone line in this exact form:
+
+~~~text
+Closes #18
+~~~
+
+The number may be any positive integer without leading zeroes. Only a whole
+line matching the literal pattern Closes #[1-9][0-9]* counts. Zero or two matching lines refuse
+the gate; prose and near misses such as **Closes #18.**, **Closes #0**, or an
+indented marker are ignored. The issue URL is constructed from
+**GITHUB_REPOSITORY**. Opening, synchronizing, reopening, or editing the pull
+request runs the gate again.
+
+The job checks out **GITHUB_SHA**, installs the repository's pinned tools, and
+runs the canonical complete suite exactly once:
+
+~~~bash
+python -m unittest discover -s tests
+~~~
+
+A JUnit adapter writes that execution to the fixed report under
+**RUNNER_TEMP**; the report is kept and the suite exit is remembered even when
+a test fails. Only after the suite completes does the gate freshly fetch
+Lawman commit **0b59edbe91b5cb5e1be8d7fd14fd4244ec9b2fe1** into a separate
+directory. It verifies **git rev-parse HEAD** against that full SHA, removes
+Python import-affecting environment variables, uses Python isolated mode,
+roots imports in that checkout, and invokes the pinned Lawman against the
+selected issue and the absolute report path. No argument supplies evidence or
+a revision; the result must report this execution's **GITHUB_SHA**.
+
+The final job outcome combines two independent facts:
+
+| Suite | Lawman | Job |
+| --- | --- | --- |
+| exit 0 | exit 0 and satisfied: true | green |
+| nonzero | any result | red: canonical suite failure |
+| any result | exit 1 | red: work contract unsatisfied |
+| any result | exit 2 | red: evaluation refused |
+
+The log keeps suite failure, unsatisfied work, and refused evaluation
+distinct. Lawman decides only whether the work contract is satisfied. GitHub
+repository rules authorize merge, consistent with ADR 8. To activate the gate,
+require the exact **Lawman** status in the rule protecting **main**; an optional
+status is not a gate.
+
+This is a bootstrap boundary, not adversarial isolation. The pinned, verified
+checkout resists ordinary evaluator substitution, but the pull request still
+controls the workflow, tests, adapter, and code that runs first on one shared
+writable runner. Human review must confirm the workflow commands, the adequacy
+of every named test, the governing issue association, the green revision, and
+any issue edits after the latest run. The report and Actions environment retain
+ADR 12's assumptions: there is no run authentication, artifact attestation,
+remote discovery, or proof that the XML was not tampered with before
+evaluation. A satisfied contract still does not authorize merge by itself.
+
 ## Transition policy
 
 Deployment to production is allowed only when tests have passed and a human has approved — because that is what this repository's Rego says, not because Lawman believes it.
