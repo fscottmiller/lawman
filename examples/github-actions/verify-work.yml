@@ -1,0 +1,70 @@
+# Verify a work contract from the tests of this execution.
+#
+# Copy this into `.github/workflows/` of the repository being governed, and set
+# ISSUE_URL to the issue that ordered the work. The whole point is the order of
+# the steps: the tests run here, in this job, over the revision this job
+# checked out, and Lawman reads what they wrote. There is no artifact to
+# download and no workflow run to go looking for (ADR 12).
+#
+# `GITHUB_ACTIONS`, `GITHUB_SHA`, `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, and
+# `GITHUB_RUN_ATTEMPT` are set by Actions. Lawman reads them itself; nothing
+# below passes a revision, and no flag would accept one.
+
+name: Verify work
+
+on:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Whatever the governed repository's suite needs. `pytest` here because
+      # it writes JUnit XML; see the runner step below.
+      - name: Install the test runner
+        run: pip install pytest
+
+      # Lawman is not installable and has no runtime dependencies (ADR 2), so
+      # it is checked out beside the work and run as a module. The dot prefix
+      # on the path is load-bearing: pytest skips dot-directories by default,
+      # so Lawman's own tests stay out of the report being judged. Without it
+      # they would appear as test cases the contract never asked about.
+      #
+      # `ref` is a placeholder, and checkout fails until it is replaced with a
+      # tag or a commit SHA. That is deliberate: the gate deciding whether work
+      # is done should not change under the repository it is judging, and a
+      # default branch is a moving target. Failing loudly beats tracking one.
+      - name: Get Lawman
+        uses: actions/checkout@v4
+        with:
+          repository: fscottmiller/lawman
+          ref: TAG_OR_COMMIT_SHA
+          path: .lawman-tool
+
+      # Any runner that writes a JUnit XML report will do. JUnit is the
+      # interchange format, not a Lawman concept and not a Python one.
+      # `--junitxml` here; `--reporter junit`, `-Dsurefire`, `go-junit-report`,
+      # and `--format JUnit` all produce the same document elsewhere.
+      #
+      # `continue-on-error` matters: a failing test should reach Lawman as a
+      # `failed` criterion, not end the job before the contract is judged.
+      - name: Run the tests
+        run: pytest --junitxml=junit.xml
+        continue-on-error: true
+
+      # The contract comes from the issue that ordered the work; the proof
+      # comes from the report above. Exit 0 means every criterion was proven
+      # by the test the contract named. Exit 1 means one was not. Exit 2 means
+      # Lawman refused to judge — a malformed execution, an unreadable report,
+      # or two tests answering to one bound name.
+      - name: Verify the work contract
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_URL: https://github.com/OWNER/REPOSITORY/issues/NUMBER
+          PYTHONPATH: .lawman-tool
+        run: python -m lawman work --issue "$ISSUE_URL" --junit junit.xml
