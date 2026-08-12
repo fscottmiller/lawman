@@ -187,7 +187,9 @@ def find_jules_source(jules: JsonClient, repository: str) -> str:
         document = _object(jules.request("GET", f"/sources{query}"), "Jules sources response")
         for candidate in _list(document.get("sources", []), "Jules sources"):
             source = _object(candidate, "Jules source")
-            repo = _object(source.get("githubRepo"), "Jules GitHub source")
+            if "githubRepo" not in source:
+                continue
+            repo = _object(source["githubRepo"], "Jules GitHub source")
             if repo.get("owner") == owner and repo.get("repo") == name:
                 source_name = source.get("name")
                 if isinstance(source_name, str) and source_name.startswith("sources/"):
@@ -359,6 +361,17 @@ def _write_summary(text: str) -> None:
         print(f"warning: could not write job summary: {error}", file=sys.stderr)
 
 
+def _write_output(name: str, value: str) -> None:
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    try:
+        with Path(path).open("a", encoding="utf-8") as output:
+            output.write(f"{name}={value}\n")
+    except OSError as error:
+        raise ReviewError(f"could not write workflow output: {error}") from None
+
+
 def _required_environment(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -394,11 +407,14 @@ def run(argv: Sequence[str] | None = None) -> int:
         pull_request = load_pull_request(args.event, repository, github)
         if pull_request.draft or not pull_request.trusted:
             reason = "draft pull request" if pull_request.draft else "pull request from a fork"
+            _write_output("reviewable", "false")
             _write_summary(f"## Jules review\n\nSkipped: {reason}. No Jules credential was provided.")
             print(f"Skipped Jules review: {reason}.")
             return 0
         if args.guard_only:
-            raise ReviewError("guard-only mode was used for a reviewable pull request")
+            _write_output("reviewable", "true")
+            print(f"Jules review is allowed for pull request #{pull_request.number}.")
+            return 0
         github_token = _required_environment("GITHUB_TOKEN")
         jules = _jules_client(_required_environment("JULES_API_KEY"))
         github = _github_client(github_token)
