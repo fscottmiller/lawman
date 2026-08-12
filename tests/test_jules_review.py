@@ -68,10 +68,18 @@ def pull_request_document(
     }
 
 
+def timed_activities(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"createTime": f"2026-08-12T00:00:{index:02d}Z", **activity}
+        for index, activity in enumerate(activities)
+    ]
+
+
 class JulesReviewContract(unittest.TestCase):
     def test_workflow_triggers_reviews_for_supported_pull_request_events(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
+        self.assertIn("pull_request_target:\n    branches: [main]", workflow)
         self.assertIn("types: [opened, reopened, ready_for_review, synchronize]", workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertTrue(pull_request().trusted)
@@ -129,6 +137,7 @@ class JulesReviewContract(unittest.TestCase):
         self.assertIn(SHA, prompt)
         self.assertIn(f"git checkout --detach {SHA}", prompt)
         self.assertIn("verify `git rev-parse HEAD`", prompt)
+        self.assertIn("Immediately before the final message, run only `git rev-parse HEAD`", prompt)
         self.assertIn("Do not modify files", prompt)
         self.assertIn("do not make a merge decision", prompt.replace("\n", " "))
 
@@ -175,24 +184,49 @@ class JulesReviewContract(unittest.TestCase):
                 poll_interval=0.0,
             )
         with self.assertRaisesRegex(ReviewError, "malformed"):
-            final_agent_message(FakeClient([{"activities": {}}]), {"name": "sessions/1"})
-        self.assertIn("continue-on-error: true", WORKFLOW.read_text(encoding="utf-8"))
+            final_agent_message(FakeClient([{"activities": {}}]), {"name": "sessions/1"}, SHA)
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("continue-on-error: true", workflow)
+        self.assertIn("timeout-minutes: 22", workflow)
+
+        repeated_token = FakeClient(
+            [
+                {"activities": [], "nextPageToken": "same"},
+                {"activities": [], "nextPageToken": "same"},
+            ]
+        )
+        with self.assertRaisesRegex(ReviewError, "repeated a page token"):
+            final_agent_message(repeated_token, {"name": "sessions/1"}, SHA)
 
     def test_completed_session_produces_sha_specific_review_comment(self) -> None:
         client = FakeClient(
             [
                 {
-                    "activities": [
-                        {"agentMessaged": {"agentMessage": "Earlier note"}},
-                        {"sessionCompleted": {}},
-                        {"agentMessaged": {"agentMessage": "One actionable finding"}},
-                    ]
+                    "activities": list(
+                        reversed(
+                            timed_activities([
+                                {"agentMessaged": {"agentMessage": "Earlier note"}},
+                                {
+                                    "artifacts": [
+                                        {
+                                            "bashOutput": {
+                                                "command": "git rev-parse HEAD",
+                                                "output": SHA + "\n",
+                                                "exitCode": 0,
+                                            }
+                                        }
+                                    ]
+                                },
+                                {"agentMessaged": {"agentMessage": "One actionable finding"}},
+                            ])
+                        )
+                    )
                 }
             ]
         )
         session = {"name": "sessions/1", "state": "COMPLETED", "url": "https://jules.google.com/task/1"}
 
-        message = final_agent_message(client, session)
+        message = final_agent_message(client, session, SHA)
         body = review_comment(pull_request(), session, message)
 
         self.assertEqual(message, "One actionable finding")
@@ -200,9 +234,76 @@ class JulesReviewContract(unittest.TestCase):
         self.assertIn(f"Reviewed commit `{SHA}`", body)
         self.assertIn("https://jules.google.com/task/1", body)
 
+    def test_completed_session_rejects_unverified_or_stale_head(self) -> None:
+        session = {"name": "sessions/1", "state": "COMPLETED"}
+        cases = (
+            [],
+            [
+                {
+                    "artifacts": [
+                        {
+                            "bashOutput": {
+                                "command": "git rev-parse HEAD",
+                                "output": "b" * 40,
+                                "exitCode": 0,
+                            }
+                        }
+                    ]
+                }
+            ],
+            [
+                {
+                    "artifacts": [
+                        {
+                            "bashOutput": {
+                                "command": "git status",
+                                "output": "clean",
+                                "exitCode": 0,
+                            }
+                        }
+                    ]
+                }
+            ],
+            [
+                {
+                    "artifacts": [
+                        {
+                            "bashOutput": {
+                                "command": "git rev-parse HEAD",
+                                "output": SHA,
+                                "exitCode": 0,
+                            }
+                        }
+                    ]
+                },
+                {"agentMessaged": {"agentMessage": "Looks good"}},
+                {
+                    "artifacts": [
+                        {
+                            "bashOutput": {
+                                "command": "git status",
+                                "output": "clean",
+                                "exitCode": 0,
+                            }
+                        }
+                    ]
+                },
+            ],
+        )
+        for activities in cases:
+            if not any("agentMessaged" in activity for activity in activities):
+                activities = [*activities, {"agentMessaged": {"agentMessage": "Looks good"}}]
+            client = FakeClient([{"activities": timed_activities(activities)}])
+            with self.subTest(activities=activities), self.assertRaisesRegex(
+                ReviewError, "did not verify final HEAD"
+            ):
+                final_agent_message(client, session, SHA)
+
     def test_same_sha_review_comment_is_updated(self) -> None:
         marker = f"<!-- lawman-jules-review:{SHA} -->"
-        client = FakeClient([[{"id": 42, "body": marker + " old"}], {"id": 42}])
+        client = FakeClient(
+            [[{"id": 42, "body": marker + " old", "user": {"login": "github-actions[bot]"}}], {"id": 42}]
+        )
 
         operation = upsert_review_comment(client, pull_request(), marker + " new")
 
@@ -210,6 +311,21 @@ class JulesReviewContract(unittest.TestCase):
         self.assertEqual(client.requests[-1][0], "PATCH")
         self.assertEqual(client.requests[-1][1], "/repos/fscottmiller/lawman/issues/comments/42")
         self.assertEqual(client.requests[-1][2], {"body": marker + " new"})
+
+    def test_forged_review_comment_marker_is_ignored(self) -> None:
+        marker = f"<!-- lawman-jules-review:{SHA} -->"
+        client = FakeClient(
+            [
+                [{"id": 41, "body": marker + " forged", "user": {"login": "attacker"}}],
+                {"id": 42},
+            ]
+        )
+
+        operation = upsert_review_comment(client, pull_request(), marker + " new")
+
+        self.assertEqual(operation, "created")
+        self.assertEqual(client.requests[-1][0], "POST")
+        self.assertEqual(client.requests[-1][1], "/repos/fscottmiller/lawman/issues/16/comments")
 
     def test_review_integration_has_no_merge_authority(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -238,6 +354,13 @@ class JulesReviewContract(unittest.TestCase):
         run_lines = [line.strip() for line in workflow.splitlines() if line.strip().startswith("run:")]
         self.assertEqual(len(run_lines), 2)
         self.assertTrue(all('${{' not in line for line in run_lines))
+
+    def test_workflow_rejects_alternate_base_branches(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        trigger = workflow.split("  workflow_dispatch:", 1)[0]
+
+        self.assertIn("pull_request_target:\n    branches: [main]", trigger)
+        self.assertNotIn("branches: ['**']", trigger)
 
     def test_load_pull_request_uses_embedded_target_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -295,10 +418,25 @@ class JulesReviewContract(unittest.TestCase):
         self.assertEqual(source, "sources/github/lawman")
         self.assertEqual(client.requests[1][1], "/sources?pageSize=100&pageToken=next%20page")
 
+        repeated = FakeClient(
+            [
+                {"sources": [], "nextPageToken": "same"},
+                {"sources": [], "nextPageToken": "same"},
+            ]
+        )
+        with self.assertRaisesRegex(ReviewError, "repeated a page token"):
+            find_jules_source(repeated, "fscottmiller/lawman")
+
     def test_review_comment_discovery_paginates(self) -> None:
         marker = f"<!-- lawman-jules-review:{SHA} -->"
         first_page = [{"id": identifier, "body": "unrelated"} for identifier in range(100)]
-        client = FakeClient([first_page, [{"id": 142, "body": marker + " old"}], {"id": 142}])
+        client = FakeClient(
+            [
+                first_page,
+                [{"id": 142, "body": marker + " old", "user": {"login": "github-actions[bot]"}}],
+                {"id": 142},
+            ]
+        )
 
         operation = upsert_review_comment(client, pull_request(), marker + " new")
 
@@ -312,6 +450,7 @@ class JulesReviewContract(unittest.TestCase):
         for claim in (
             "install the Jules GitHub app",
             "`JULES_API_KEY`",
+            "targeting `main`",
             "Pull requests from forks are skipped",
             "advisory",
             "run it manually",
