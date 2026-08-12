@@ -11,10 +11,11 @@ changes.
 3. Add the key as the repository Actions secret `JULES_API_KEY`.
 
 The `Jules review` workflow runs when a pull request is opened, reopened, marked ready, or receives a new commit. A
-maintainer can also run it manually with **Actions → Jules review → Run workflow** and a pull request number.
+maintainer can also run it manually from the repository's default branch with **Actions → Jules review → Run
+workflow** and a pull request number.
 
-Draft pull requests wait until they are marked ready. Pull requests from forks are skipped because GitHub does not
-expose repository secrets to untrusted fork workflows. The job summary says why a review was skipped.
+Draft pull requests wait until they are marked ready. Pull requests from forks are skipped by the secret-free guard;
+the job summary says why, and the Jules credential is never supplied to their workflow job.
 
 ## What it does
 
@@ -22,6 +23,11 @@ The workflow gives Jules the pull request's exact head branch and a review-only 
 request title or body in the prompt, enable Jules's automatic pull-request mode, or give Jules permission to change the
 repository. The final agent message is posted as one comment identified by the head SHA. Re-running the review for the
 same SHA updates that comment.
+
+GitHub runs automatic reviews with `pull_request_target`. A secret-free guard job first loads code from the trusted
+base commit and rejects drafts and forks. Only a reviewable pull request starts the second job that receives the Jules
+credential, and that job also runs the trusted base-branch implementation. Pull-request code is review input; the
+workflow never executes it.
 
 The Jules API is `v1alpha`. API failures, blocked sessions, malformed responses, missing configuration, and the bounded
 20-minute timeout are recorded in the job summary. The review step uses `continue-on-error`, so provider availability
