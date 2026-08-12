@@ -1,12 +1,19 @@
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Mapping
+from unittest.mock import patch
 
 from lawman.jules_review import (
     PullRequest,
     ReviewError,
     final_agent_message,
+    find_jules_source,
+    load_pull_request,
     review_comment,
+    run,
     session_request,
     upsert_review_comment,
     wait_for_session,
@@ -46,25 +53,69 @@ def pull_request(*, head_repository: str = "fscottmiller/lawman", draft: bool = 
     )
 
 
+def pull_request_document(
+    *, head_repository: str = "fscottmiller/lawman", draft: bool = False
+) -> dict[str, Any]:
+    return {
+        "number": 16,
+        "draft": draft,
+        "head": {
+            "ref": "agent/advisory-jules-reviews",
+            "sha": SHA,
+            "repo": {"full_name": head_repository},
+        },
+        "base": {"ref": "main"},
+    }
+
+
 class JulesReviewContract(unittest.TestCase):
     def test_workflow_triggers_reviews_for_supported_pull_request_events(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn("types: [opened, reopened, ready_for_review, synchronize]", workflow)
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("github.event.pull_request.draft", workflow)
         self.assertTrue(pull_request().trusted)
         self.assertTrue(pull_request(draft=True).draft)
 
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            output = Path(directory) / "output"
+            event.write_text(
+                json.dumps({"pull_request": pull_request_document(draft=True)}),
+                encoding="utf-8",
+            )
+            environment = {
+                "GITHUB_REPOSITORY": "fscottmiller/lawman",
+                "GITHUB_OUTPUT": str(output),
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                self.assertEqual(run(["--event", str(event), "--guard-only"]), 0)
+            self.assertEqual(output.read_text(encoding="utf-8"), "reviewable=false\n")
+
     def test_workflow_skips_forks_without_exposing_secrets(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        skip_step, review_step = workflow.split("- name: Run advisory Jules review")
+        guard_job, review_job = workflow.split("\n  review:\n")
 
-        self.assertIn("head.repo.full_name != github.repository", skip_step)
-        self.assertNotIn("JULES_API_KEY", skip_step)
-        self.assertIn("head.repo.full_name == github.repository", review_step)
-        self.assertIn("JULES_API_KEY: ${{ secrets.JULES_API_KEY }}", review_step)
+        self.assertNotIn("JULES_API_KEY", guard_job)
+        self.assertIn("reviewable: ${{ steps.guard.outputs.reviewable }}", guard_job)
+        self.assertIn("if: needs.guard.outputs.reviewable == 'true'", review_job)
+        self.assertIn("JULES_API_KEY: ${{ secrets.JULES_API_KEY }}", review_job)
         self.assertFalse(pull_request(head_repository="someone/fork").trusted)
+
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            output = Path(directory) / "output"
+            event.write_text(
+                json.dumps({"pull_request": pull_request_document(head_repository="someone/fork")}),
+                encoding="utf-8",
+            )
+            environment = {
+                "GITHUB_REPOSITORY": "fscottmiller/lawman",
+                "GITHUB_OUTPUT": str(output),
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                self.assertEqual(run(["--event", str(event), "--guard-only"]), 0)
+            self.assertEqual(output.read_text(encoding="utf-8"), "reviewable=false\n")
 
     def test_session_request_is_bound_to_head_branch_and_review_only(self) -> None:
         request = session_request("sources/github/fscottmiller/lawman", pull_request())
@@ -175,6 +226,11 @@ class JulesReviewContract(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         module = MODULE.read_text(encoding="utf-8")
 
+        self.assertIn("pull_request_target:", workflow)
+        self.assertNotIn("\n  pull_request:\n", workflow)
+        trusted_ref = "ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}"
+        self.assertEqual(workflow.count(trusted_ref), 2)
+        self.assertEqual(workflow.count("persist-credentials: false"), 2)
         self.assertNotIn("github.event.pull_request.title", workflow)
         self.assertNotIn("github.event.pull_request.body", workflow)
         self.assertNotIn("document.get(\"title\")", module)
@@ -182,6 +238,73 @@ class JulesReviewContract(unittest.TestCase):
         run_lines = [line.strip() for line in workflow.splitlines() if line.strip().startswith("run:")]
         self.assertEqual(len(run_lines), 2)
         self.assertTrue(all('${{' not in line for line in run_lines))
+
+    def test_load_pull_request_uses_embedded_target_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"pull_request": pull_request_document()}), encoding="utf-8")
+            client = FakeClient([])
+
+            loaded = load_pull_request(event, "fscottmiller/lawman", client)
+
+        self.assertEqual(loaded, pull_request())
+        self.assertEqual(client.requests, [])
+
+    def test_load_pull_request_resolves_manual_dispatch_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"inputs": {"pull_request": "16"}}), encoding="utf-8")
+            client = FakeClient([pull_request_document()])
+
+            loaded = load_pull_request(event, "fscottmiller/lawman", client)
+
+        self.assertEqual(loaded, pull_request())
+        self.assertEqual(client.requests, [("GET", "/repos/fscottmiller/lawman/pulls/16", None)])
+
+    def test_load_pull_request_rejects_unreadable_and_malformed_events(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            malformed = Path(directory) / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            invalid_input = Path(directory) / "invalid-input.json"
+            invalid_input.write_text(json.dumps({"inputs": {"pull_request": "zero"}}), encoding="utf-8")
+
+            for event in (missing, malformed):
+                with self.subTest(event=event.name), self.assertRaisesRegex(ReviewError, "unreadable"):
+                    load_pull_request(event, "fscottmiller/lawman", FakeClient([]))
+            with self.assertRaisesRegex(ReviewError, "positive integer"):
+                load_pull_request(invalid_input, "fscottmiller/lawman", FakeClient([]))
+
+    def test_jules_source_discovery_skips_unknown_sources_and_paginates(self) -> None:
+        client = FakeClient(
+            [
+                {"sources": [{"name": "sources/future/1", "futureRepo": {}}], "nextPageToken": "next page"},
+                {
+                    "sources": [
+                        {
+                            "name": "sources/github/lawman",
+                            "githubRepo": {"owner": "fscottmiller", "repo": "lawman"},
+                        }
+                    ]
+                },
+            ]
+        )
+
+        source = find_jules_source(client, "fscottmiller/lawman")
+
+        self.assertEqual(source, "sources/github/lawman")
+        self.assertEqual(client.requests[1][1], "/sources?pageSize=100&pageToken=next%20page")
+
+    def test_review_comment_discovery_paginates(self) -> None:
+        marker = f"<!-- lawman-jules-review:{SHA} -->"
+        first_page = [{"id": identifier, "body": "unrelated"} for identifier in range(100)]
+        client = FakeClient([first_page, [{"id": 142, "body": marker + " old"}], {"id": 142}])
+
+        operation = upsert_review_comment(client, pull_request(), marker + " new")
+
+        self.assertEqual(operation, "updated")
+        self.assertIn("page=2", client.requests[1][1])
+        self.assertEqual(client.requests[-1][1], "/repos/fscottmiller/lawman/issues/comments/142")
 
     def test_jules_review_documentation_matches_public_behavior(self) -> None:
         documentation = DOCUMENTATION.read_text(encoding="utf-8")
