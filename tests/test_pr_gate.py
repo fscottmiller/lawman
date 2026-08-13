@@ -1,7 +1,6 @@
 """Behavioral evidence for the self-governing pull-request gate."""
 
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -251,8 +250,17 @@ class GateTest(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertIn("Lawman exit contradicts its result", stderr)
 
+        missing_revision = FakeProcesses(result_revision=None)
+        environment = self.environment()
+        environment.pop(REVISION_VARIABLE)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, environment, clear=True):
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = run_gate(missing_revision)
+        self.assertEqual(exit_code, 2)
+        self.assertIn("Lawman result does not name GITHUB_SHA", stderr.getvalue())
 
-@unittest.skipUnless(importlib.util.find_spec("xmlrunner"), "the JUnit adapter is installed with development tools")
+
 class JUnitAdapterTest(unittest.TestCase):
     def test_adapter_preserves_a_report_when_unittest_fails(self):
         """The real adapter leaves readable pass/fail identities after the exact command."""

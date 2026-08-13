@@ -257,7 +257,7 @@ def _combine(suite_exit: int, outcome: subprocess.CompletedProcess[str], issue_u
         return 2
     execution = document.get("execution")
     revision = execution.get("revision") if isinstance(execution, Mapping) else None
-    if revision != os.environ.get(REVISION_VARIABLE):
+    if not revision or revision != os.environ.get(REVISION_VARIABLE):
         print("lawman gate: evaluation refused (Lawman result does not name GITHUB_SHA)", file=sys.stderr)
         return 2
     source = document.get("contract_source")
