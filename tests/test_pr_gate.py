@@ -1,6 +1,7 @@
 """Behavioral evidence for the self-governing pull-request gate."""
 
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -262,6 +263,12 @@ class GateTest(unittest.TestCase):
 
 
 class JUnitAdapterTest(unittest.TestCase):
+    def setUp(self):
+        self.assertIsNotNone(
+            importlib.util.find_spec("xmlrunner"),
+            "the JUnit adapter needs xmlrunner: pip install -r requirements-dev.txt",
+        )
+
     def test_adapter_preserves_a_report_when_unittest_fails(self):
         """The real adapter leaves readable pass/fail identities after the exact command."""
         with tempfile.TemporaryDirectory() as temporary:

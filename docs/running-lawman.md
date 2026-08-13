@@ -511,15 +511,15 @@ Work contracts keep their own model — names, explicit evidence bound to the so
 ## The tests
 
 ```bash
+pip install -r requirements-dev.txt
 python -m unittest discover -s tests
 ```
 
-Tests that need the real OPA skip when it is not installed. CI installs the pinned version, so CI runs all of them.
+The development requirements include the JUnit adapter exercised by the complete suite. Tests that need the real OPA skip when it is not installed. CI installs both the development requirements and the pinned OPA version, so CI runs all tests.
 
-The type and style checks need their tools, pinned in `requirements-dev.txt` and configured in `setup.cfg`:
+The type and style checks use the same pinned development requirements and are configured in `setup.cfg`:
 
 ```bash
-pip install -r requirements-dev.txt
 python -m mypy                              # strict, over lawman/
 python -m flake8
 python -m isort --check-only lawman tests
