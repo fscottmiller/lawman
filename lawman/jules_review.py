@@ -220,7 +220,14 @@ def find_jules_source(jules: JsonClient, repository: str) -> str:
             if "githubRepo" not in source:
                 continue
             repo = _object(source["githubRepo"], "Jules GitHub source")
-            if repo.get("owner") == owner and repo.get("repo") == name:
+            repo_owner = repo.get("owner")
+            repo_name = repo.get("repo")
+            if (
+                isinstance(repo_owner, str)
+                and repo_owner.casefold() == owner.casefold()
+                and isinstance(repo_name, str)
+                and repo_name.casefold() == name.casefold()
+            ):
                 source_name = source.get("name")
                 if isinstance(source_name, str) and source_name.startswith("sources/"):
                     return source_name
@@ -287,7 +294,7 @@ def wait_for_session(
     if "state" not in current:
         current = _object(jules.request("GET", f"/{name}"), "Jules session")
     while True:
-        state = current.get("state")
+        state = current.get("state", "STATE_UNSPECIFIED")
         if not isinstance(state, str) or state not in KNOWN_STATES:
             raise ReviewError("Jules session has an unknown state")
         if state == "COMPLETED":
@@ -321,7 +328,8 @@ def final_agent_message(jules: JsonClient, session: Mapping[str, Any], expected_
             break
     messages: list[tuple[str, bool]] = []
     verified_sha = False
-    for activity in sorted(activities, key=_activity_time):
+    relevant = [activity for activity in activities if "artifacts" in activity or "agentMessaged" in activity]
+    for activity in sorted(relevant, key=_activity_time):
         for artifact_candidate in _list(activity.get("artifacts", []), "Jules activity artifacts"):
             artifact = _object(artifact_candidate, "Jules artifact")
             bash_candidate = artifact.get("bashOutput")
@@ -332,7 +340,7 @@ def final_agent_message(jules: JsonClient, session: Mapping[str, Any], expected_
             bash = _object(bash_candidate, "Jules bash output")
             command = bash.get("command")
             output = bash.get("output")
-            exit_code = bash.get("exitCode")
+            exit_code = bash.get("exitCode", 0)
             verified_sha = (
                 isinstance(command, str)
                 and command.strip() == "git rev-parse HEAD"

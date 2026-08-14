@@ -82,6 +82,8 @@ class JulesReviewContract(unittest.TestCase):
         self.assertIn("pull_request_target:\n    branches: [main]", workflow)
         self.assertIn("types: [opened, reopened, ready_for_review, synchronize]", workflow)
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertEqual(workflow.count("uses: actions/setup-python@v5"), 2)
+        self.assertEqual(workflow.count('python-version: "3.11"'), 2)
         self.assertTrue(pull_request().trusted)
         self.assertTrue(pull_request(draft=True).draft)
 
@@ -143,7 +145,7 @@ class JulesReviewContract(unittest.TestCase):
 
     def test_jules_failures_are_bounded_and_advisory(self) -> None:
         completed = wait_for_session(
-            FakeClient([{"name": "sessions/1", "state": "COMPLETED"}]),
+            FakeClient([{"name": "sessions/1"}, {"name": "sessions/1", "state": "COMPLETED"}]),
             {"name": "sessions/1"},
             timeout=1.0,
             poll_interval=0.0,
@@ -212,7 +214,6 @@ class JulesReviewContract(unittest.TestCase):
                                             "bashOutput": {
                                                 "command": "git rev-parse HEAD",
                                                 "output": SHA + "\n",
-                                                "exitCode": 0,
                                             }
                                         }
                                     ]
@@ -221,6 +222,7 @@ class JulesReviewContract(unittest.TestCase):
                             ])
                         )
                     )
+                    + [{"progressUpdated": {"title": "Done"}}]
                 }
             ]
         )
@@ -246,6 +248,19 @@ class JulesReviewContract(unittest.TestCase):
                                 "command": "git rev-parse HEAD",
                                 "output": "b" * 40,
                                 "exitCode": 0,
+                            }
+                        }
+                    ]
+                }
+            ],
+            [
+                {
+                    "artifacts": [
+                        {
+                            "bashOutput": {
+                                "command": "git rev-parse HEAD",
+                                "output": SHA,
+                                "exitCode": 1,
                             }
                         }
                     ]
@@ -344,8 +359,9 @@ class JulesReviewContract(unittest.TestCase):
 
         self.assertIn("pull_request_target:", workflow)
         self.assertNotIn("\n  pull_request:\n", workflow)
-        trusted_ref = "ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}"
+        trusted_ref = "ref: ${{ github.event.repository.default_branch }}"
         self.assertEqual(workflow.count(trusted_ref), 2)
+        self.assertNotIn("github.event.pull_request.base.sha", workflow)
         self.assertEqual(workflow.count("persist-credentials: false"), 2)
         self.assertNotIn("github.event.pull_request.title", workflow)
         self.assertNotIn("github.event.pull_request.body", workflow)
@@ -406,7 +422,7 @@ class JulesReviewContract(unittest.TestCase):
                     "sources": [
                         {
                             "name": "sources/github/lawman",
-                            "githubRepo": {"owner": "fscottmiller", "repo": "lawman"},
+                            "githubRepo": {"owner": "FScottMiller", "repo": "Lawman"},
                         }
                     ]
                 },
@@ -454,6 +470,10 @@ class JulesReviewContract(unittest.TestCase):
             "Pull requests from forks are skipped",
             "advisory",
             "run it manually",
+            "current default-branch implementation",
+            "GitHub Actions jobs never execute pull-request code",
+            "Jules does execute shell commands against its pull-request checkout",
+            "not a capability sandbox",
         ):
             self.assertIn(claim, documentation)
 
