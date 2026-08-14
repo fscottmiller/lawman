@@ -1,0 +1,68 @@
+name: Jules review
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request number to review
+        required: true
+        type: string
+
+concurrency:
+  group: jules-review-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pull_request }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      reviewable: ${{ steps.guard.outputs.reviewable }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Guard Jules credential
+        id: guard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m lawman.jules_review --event "$GITHUB_EVENT_PATH" --guard-only
+
+  review:
+    needs: guard
+    if: needs.guard.outputs.reviewable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run advisory Jules review
+        continue-on-error: true
+        timeout-minutes: 22
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: python -m lawman.jules_review --event "$GITHUB_EVENT_PATH"
