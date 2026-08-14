@@ -111,6 +111,16 @@ python -m lawman work \
 
 The issue states its contract in one fenced `lawman-work-contract` block, and the result records which issue it read and a hash of the exact contract it judged.
 
+And the evidence does not have to be written by the party claiming to have earned it. Run Lawman inside the GitHub Actions job that ran the tests, and it derives the evidence from what they reported:
+
+```bash
+python -m lawman work \
+  --issue "$ISSUE_URL" \
+  --junit junit.xml
+```
+
+Each criterion is proven by the exact test the contract named, or it is not proven. The result records `GITHUB_SHA` — the revision that execution actually tested — and no argument can supply one.
+
 Satisfying a work contract proves the work is done. It does not authorize a transition. Transition execution is not built yet.
 
 [How to run it](docs/running-lawman.md) · [Why it looks like this](docs/decisions/)

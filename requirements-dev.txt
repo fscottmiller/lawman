@@ -6,3 +6,5 @@
 mypy==2.3.0
 flake8==7.3.0
 isort==8.0.1
+lxml==6.0.2
+unittest-xml-reporting==4.0.0

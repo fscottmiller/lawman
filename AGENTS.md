@@ -24,8 +24,8 @@ If the issue's contract is missing or ambiguous, stop and ask. Do not invent acc
 Run the complete local checks:
 
 ```bash
-python -m unittest discover -s tests
 pip install -r requirements-dev.txt
+python -m unittest discover -s tests
 python -m mypy
 python -m flake8
 python -m isort --check-only lawman tests

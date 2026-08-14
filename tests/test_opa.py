@@ -30,7 +30,9 @@ from lawman.opa import DECISION_DOCUMENT, EXECUTABLE, evaluate_policy
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "examples" / "deploy-to-production"
 POLICY = ROOT / ".lawman" / "policies" / "deploy-production.rego"
-WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+WORKFLOW_DIRECTORY = ROOT / ".github" / "workflows"
+CI_WORKFLOW = WORKFLOW_DIRECTORY / "ci.yml"
+LAWMAN_WORKFLOW = WORKFLOW_DIRECTORY / "lawman.yml"
 DEPLOY = Intent(action="deploy", target="production")
 PROVEN = Evidence.from_dict({"tests_passed": True, "human_approved": True})
 ALLOWED = {"allowed": True, "reasons": ["The stand-in allowed it."]}
@@ -44,9 +46,19 @@ def on_path(directory):
     return mock.patch.dict(os.environ, {"PATH": str(directory)})
 
 
-def pinned_opa_versions():
-    """Every OPA version the CI workflow pins."""
-    return re.findall(r'OPA_VERSION:\s*"([^"]+)"', WORKFLOW.read_text(encoding="utf-8"))
+def pinned_opa_releases():
+    """Every OPA version and checksum pinned by each repository workflow."""
+    pattern = re.compile(
+        r'OPA_VERSION:\s*"([^"]+)"\s+OPA_SHA256:\s*"([0-9a-f]{64})"'
+    )
+    workflows = {}
+    for workflow in WORKFLOW_DIRECTORY.iterdir():
+        if workflow.suffix not in {".yml", ".yaml"}:
+            continue
+        document = workflow.read_text(encoding="utf-8")
+        if "OPA_VERSION" in document:
+            workflows[workflow] = pattern.findall(document)
+    return workflows
 
 
 def run_cli(intent, evidence, cwd=ROOT, path=None):
@@ -66,6 +78,43 @@ def write(path, document):
 
 
 class EvaluatesThroughAnExternalOpa(unittest.TestCase):
+    def test_opa_workflows_are_discovered_from_the_directory(self):
+        """A future OPA workflow joins pin agreement without a maintained list."""
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            workflow = directory / "nightly.yaml"
+            workflow.write_text(
+                'env:\n  OPA_VERSION: "1.10.0"\n  OPA_SHA256: "' + "f" * 64 + '"\n',
+                encoding="utf-8",
+            )
+            (directory / "ignored.yml").write_text("name: no OPA here\n", encoding="utf-8")
+            with mock.patch(f"{__name__}.WORKFLOW_DIRECTORY", directory):
+                releases = pinned_opa_releases()
+
+        self.assertEqual(releases, {workflow: [("1.10.0", "f" * 64)]})
+
+    def test_ci_and_lawman_pin_the_same_opa_release(self):
+        """Every workflow evaluates against one identical OPA binary pin."""
+        releases = pinned_opa_releases()
+        self.assertTrue(
+            {CI_WORKFLOW, LAWMAN_WORKFLOW}.issubset(releases),
+            "CI and Lawman must both be discovered as OPA workflows",
+        )
+        pins = []
+        for workflow, workflow_pins in releases.items():
+            with self.subTest(workflow=workflow.name):
+                self.assertEqual(
+                    len(workflow_pins), 1, f"{workflow.name} must pin exactly one OPA release"
+                )
+            if len(workflow_pins) == 1:
+                pins.append(workflow_pins[0])
+        self.assertEqual(len(pins), len(releases), "every OPA workflow must expose one OPA pin")
+        self.assertEqual(
+            len(set(pins)),
+            1,
+            "CI and Lawman must pin the same OPA version and checksum",
+        )
+
     def test_transition_decision_is_evaluated_by_external_opa(self):
         """AC2. The verdict comes out of the OPA process, and nowhere else."""
         refuted = Evidence.from_dict({"tests_passed": False, "human_approved": False})
@@ -265,8 +314,14 @@ class RefusesAnythingThatIsNotOneWellFormedDecision(unittest.TestCase):
 class TheRealOpaDecides(unittest.TestCase):
     def test_real_pinned_opa_evaluates_the_example_policy(self):
         """AC13. End to end, against the exact OPA version CI installs."""
-        self.assertEqual(len(pinned_opa_versions()), 1, "CI must pin exactly one OPA version")
-        self.assertRegex(pinned_opa_versions()[0], r"^\d+\.\d+\.\d+$")
+        ci_pins = pinned_opa_releases()[CI_WORKFLOW]
+        self.assertEqual(len(ci_pins), 1, "CI must pin exactly one OPA release")
+        version = ci_pins[0][0]
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+        installed = subprocess.run(
+            [str(REAL_OPA), "version"], capture_output=True, text=True, check=True
+        )
+        self.assertIn(f"Version: {version}", installed.stdout)
 
         allowed = run_cli(EXAMPLE / "intent.json", EXAMPLE / "evidence.json")
 
